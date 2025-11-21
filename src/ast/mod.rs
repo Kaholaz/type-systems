@@ -33,26 +33,39 @@ use nonempty::NonEmpty;
 // *******************
 /// program is definition sequence
 /// <prog> ::= <def> {’,’ <def>}
+#[derive(Debug)]
 pub struct Program {
-    pub definitions: NonEmpty<Definition>,
+    pub definitions: NonEmpty<Declaration>,
 }
 
 /// <def> ::= ’@’ <file_name> | <tdef> | <vdef>
-pub enum Definition {
-    IncludeDefinition(FileName),
-    TypeDefinition(TypeDeclaration),
-    ValueDefinition(VariableDeclaration),
+#[derive(Debug)]
+pub enum Declaration {
+    IncludeDeclaration(FileName),
+    TypeDeclaration(TypeDeclaration),
+    VariableDeclaration(VariableDeclaration),
 }
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
 /// ’@’ <file_name>
-pub type FileName = String;
+#[derive(Debug)]
+pub struct FileName(String);
+impl FileName {
+    pub fn new(s: impl Into<String>) -> Self {
+        FileName(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 // *********
 // * Types *
 // *********
 
 /// <tdef> ::= <tname> ’=’ ( <tnom> | <texp> ).
+#[derive(Debug)]
 pub struct TypeDeclaration {
     /// <tname>
     pub type_name: TypeName,
@@ -63,9 +76,20 @@ pub struct TypeDeclaration {
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
 /// <tname> ’=’ <tnom> | <texp>
-pub type TypeName = String;
+#[derive(Debug)]
+pub struct TypeName(String);
+impl TypeName {
+    pub fn new(s: impl Into<String>) -> Self {
+        TypeName(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// <tnom> | <texp>
+#[derive(Debug)]
 pub enum TypeDefinition {
     /// specify name of nominal type
     /// <tnom>
@@ -77,10 +101,11 @@ pub enum TypeDefinition {
 }
 
 /// <tnom> ::= ’{’ <decl> {’,’ <decl>} ’}’ | ’\[’ <elem> {’,’ <elem>} ’\]’
+#[derive(Debug)]
 pub enum NominalType {
     /// type of struct
     /// ’{’ <decl> {’,’ <decl>} ’}’
-    StructType(NonEmpty<FieldTypeDeclaration>),
+    StructType(NonEmpty<StructFieldTypeDeclaration>),
 
     /// type of union
     /// ’\[’ <elem> {’,’ <elem>} ’\]’
@@ -89,19 +114,22 @@ pub enum NominalType {
 
 /// field is of given type
 /// <decl> ::= <vname> ’:’ <texp>
-pub struct FieldTypeDeclaration {
+#[derive(Debug)]
+pub struct StructFieldTypeDeclaration {
     pub field_name: VariableName,
     pub type_expression: TypeExpression,
 }
 
 /// simple label or typed field
 /// <elem> ::= <vname> [’:’ <texp>]
+#[derive(Debug)]
 pub struct EnumElementTypeDeclaration {
     pub element_name: VariableName,
     pub type_expression: Option<TypeExpression>,
 }
 
 /// <texp> ::= <tval> | <tval> ’->’ <texp>
+#[derive(Debug)]
 pub enum TypeExpression {
     /// <tval>
     TypeValue(Box<TypeValue>),
@@ -111,6 +139,7 @@ pub enum TypeExpression {
 }
 
 /// <tval> ::= <tname> | ’(’ <texp> {’,’ <texp>} ’)’
+#[derive(Debug)]
 pub enum TypeValue {
     /// name of type
     /// <tname>
@@ -126,6 +155,7 @@ pub enum TypeValue {
 // **********
 
 /// <vdef> ::= <vname> ’=’ <vexp>
+#[derive(Debug)]
 pub struct VariableDeclaration {
     pub variable_name: VariableName,
     pub variable_definition: Expression,
@@ -133,23 +163,30 @@ pub struct VariableDeclaration {
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
 /// <vname> ’=’ <vexp>
-pub type VariableName = String;
+#[derive(Debug)]
+pub struct VariableName(String);
+impl VariableName {
+    pub fn new(s: impl Into<String>) -> Self {
+        VariableName(s.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// <vexp> ::= <fval> | <vexp> <fval>
-pub enum Expression {
-    /// <fval>
-    FunctionValue(Box<FunctionValue>),
-
-    // function application
-    /// <vexp> <fval>
-    FunctionApplication(Box<Expression>, Box<FunctionValue>),
+#[derive(Debug)]
+pub struct Expression {
+    pub values: Box<NonEmpty<ExpressionValue>>,
 }
 
 /// <fval> ::= ’\’ <decl> ’.’ <fval> | <val> | <tname> <spec>
-pub enum FunctionValue {
+#[derive(Debug)]
+pub enum ExpressionValue {
     /// function definition (lambda)
     /// ’\’ <decl> ’.’ <fval>
-    FunctionDeclaration(FieldTypeDeclaration, Box<FunctionValue>),
+    FunctionDeclaration(StructFieldTypeDeclaration, Box<ExpressionValue>),
 
     /// <val>
     ValueExpression(Value),
@@ -160,6 +197,7 @@ pub enum FunctionValue {
 }
 
 /// <val> ::= <vname> | ’(’ <vexp> {’,’ <vexp>} ’)’ | <val> ’.’ <vname> | <val> ’[’ <vdef> {’,’ <vdef>} [’|’ <vexp>] ’]’
+#[derive(Debug)]
 pub enum Value {
     /// content of variable (named value)
     /// <vname>
@@ -183,17 +221,19 @@ pub enum Value {
 }
 
 /// <spec> ::= ’[’ (<vdef> | <vname>) ’]’ | ’{’ [<vdef> {’,’ <vdef>}] ’}’
+#[derive(Debug)]
 pub enum Spec {
     /// union value
     /// ’[’ (<vdef> | <vname>) ’]’
     UnionValue(UnionValue),
 
-    /// struct field values
+    /// struct field values (may be empty)
     /// ’{’ [<vdef> {’,’ <vdef>}] ’}’
-    StructFieldValue(NonEmpty<VariableDeclaration>), // Box because of recursive structure
+    StructValue(Vec<VariableDeclaration>),
 }
 
 /// ’[’ (<vdef> | <vname>) ’]’
+#[derive(Debug)]
 pub enum UnionValue {
     /// <vdef>
     VariableDeclaration(VariableDeclaration),

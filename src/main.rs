@@ -3,5 +3,12 @@ pub mod parser;
 pub mod runtime;
 
 fn main() {
-    // parse a program and run it :D
+    match parser::parse("x=y".to_string()) {
+        Ok(_) => {
+            print!("yes");
+        }
+        Err(e) => {
+            dbg!(e);
+        }
+    }
 }
