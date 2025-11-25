@@ -92,7 +92,6 @@ impl Parsable for FileName {
 impl Parsable for TypeDeclaration {
     fn parse(scanner: &mut Scanner) -> Result<Self, ParserError> {
         let type_name = TypeName::parse(scanner)?;
-        dbg!(&type_name);
         if *scanner.current_char()? != '=' {
             return Err(ParserError {
                 message: "expected `=` in type declaration".to_string(),
@@ -136,14 +135,11 @@ impl Parsable for TypeDefinition {
 /// <tnom> ::= ’{’ <decl> {’,’ <decl>} ’}’ | ’\[’ <elem> {’,’ <elem>} ’\]’
 impl Parsable for NominalType {
     fn parse(scanner: &mut Scanner) -> Result<Self, ParserError> {
-        dbg!(scanner.current_char()?);
         match scanner.current_char()? {
             // parsing a struct type
             '{' => {
                 scanner.advance_and_skip_whitespace()?;
-                dbg!("lol");
                 let head = StructFieldTypeDeclaration::parse(scanner)?;
-                dbg!(&head);
                 let mut tail = Vec::new();
                 while *scanner.current_char()? == ',' {
                     scanner.advance_and_skip_whitespace()?;
@@ -220,23 +216,19 @@ impl Parsable for EnumElementTypeDeclaration {
 impl Parsable for TypeExpression {
     fn parse(scanner: &mut Scanner) -> Result<Self, ParserError> {
         let type_value = TypeValue::parse(scanner)?;
-        dbg!(&type_value);
         if !scanner.is_at_end()
             && !TERMINATING_CHARACTERS.contains(scanner.current_char()?)
             && *scanner.current_char()? == '-'
         {
-            dbg!("lol3");
             scanner.advance()?;
             scanner
                 .expect_character('>', "expected `>` in arrow of type expression".to_string())?;
             scanner.skip_whitespace();
-            dbg!("lol2");
             Ok(Self::FunctionType(
                 Box::new(type_value),
                 Box::new(TypeExpression::parse(scanner)?),
             ))
         } else {
-            dbg!("lol");
             Ok(Self::TypeValue(Box::new(type_value)))
         }
     }
@@ -245,7 +237,6 @@ impl Parsable for TypeExpression {
 /// <tval> ::= <tname> | ’(’ <texp> {’,’ <texp>} ’)’
 impl Parsable for TypeValue {
     fn parse(scanner: &mut Scanner) -> Result<Self, ParserError> {
-        dbg!(&scanner.current_char());
         if *scanner.current_char()? == '(' {
             scanner.advance_and_skip_whitespace()?;
             let head = TypeExpression::parse(scanner)?;
@@ -277,11 +268,9 @@ impl Parsable for TypeValue {
 impl Parsable for VariableDeclaration {
     fn parse(scanner: &mut Scanner) -> Result<Self, ParserError> {
         let variable_name = VariableName::parse(scanner)?;
-        dbg!(&variable_name);
         scanner.expect_character('=', "expected `=` in variable declaration".to_string())?;
         scanner.skip_whitespace();
         let variable_definition = Expression::parse(scanner)?;
-        dbg!(&variable_definition);
         Ok(Self {
             variable_name,
             variable_definition,
@@ -319,7 +308,6 @@ impl Parsable for VariableName {
 impl Parsable for Expression {
     fn parse(scanner: &mut Scanner) -> Result<Self, ParserError> {
         let head = ExpressionValue::parse(scanner)?;
-        dbg!(&head);
         let mut tail = Vec::new();
         while !scanner.is_at_end() && !TERMINATING_CHARACTERS.contains(scanner.current_char()?) {
             tail.push(ExpressionValue::parse(scanner)?);
@@ -360,7 +348,6 @@ impl Parsable for Value {
         let mut current = if *scanner.current_char()? == '(' {
             scanner.advance_and_skip_whitespace()?;
             let head = Expression::parse(scanner)?;
-            dbg!(&head);
             let mut tail = Vec::new();
             while *scanner.current_char()? == ',' {
                 scanner.advance_and_skip_whitespace()?;
