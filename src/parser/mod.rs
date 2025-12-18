@@ -11,11 +11,12 @@ use crate::{
         scanner::{LineAndColumn, Scanner},
     },
 };
+use anyhow::Result;
 
 static RESERVED_CHARACTERS: [char; 11] = ['{', '}', '[', ']', '(', ')', ',', '.', '|', ':', '='];
 static TERMINATING_CHARACTERS: [char; 5] = ['}', ']', ')', ',', '|'];
 
-pub fn parse(source: String) -> Result<Program, ParserError> {
+pub fn parse(source: String) -> Result<Program> {
     let mut scanner = Scanner::new(source);
     Program::parse(&mut scanner)
 }
@@ -48,7 +49,7 @@ mod tests {
     }
 
     // Helper to parse a full program
-    fn parse_program(s: &str) -> Result<Program, ParserError> {
+    fn parse_program(s: &str) -> Result<Program> {
         Program::parse(&mut scan(s))
     }
 
