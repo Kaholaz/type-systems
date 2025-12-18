@@ -149,7 +149,7 @@ pub enum TypeExpression {
     TypeValue(Box<TypeValue>),
     /// type of a function
     /// <tval> ’->’ <texp>
-    FunctionType(Box<LinkedList<TypeValue>>, Box<TypeValue>),
+    FunctionType(Box<LinkedList<TypeValue>>),
 }
 
 /// <tval> ::= <tname> | ’(’ <texp> {’,’ <texp>} ’)’

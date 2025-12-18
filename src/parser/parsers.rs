@@ -300,12 +300,11 @@ impl Parsable for TypeExpression {
             match TypeExpression::parse(scanner)
                 .context("failed to parse result type in function type")?
             {
-                TypeExpression::TypeValue(result) => Ok(Self::FunctionType(
-                    Box::new(LinkedList::singleton(arg)),
-                    result,
-                )),
-                TypeExpression::FunctionType(args, result) => {
-                    Ok(Self::FunctionType(LinkedList::cons(arg, args), result))
+                TypeExpression::TypeValue(result) => {
+                    Ok(Self::FunctionType(Box::new(LinkedList::singleton(*result))))
+                }
+                TypeExpression::FunctionType(args) => {
+                    Ok(Self::FunctionType(LinkedList::cons(arg, args)))
                 }
             }
         } else {

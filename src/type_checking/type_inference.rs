@@ -287,16 +287,10 @@ impl TypeInfer for TypeExpression {
             TypeExpression::TypeValue(tyvalue) => tyvalue
                 .type_infer(stack, ctx)
                 .context("While inferring type value"),
-            TypeExpression::FunctionType(arguments, return_type) => {
+            TypeExpression::FunctionType(arguments) => {
                 let arguments = type_infer_arguments(arguments, stack, ctx)
                     .context("While inferring function argument types")?;
-                let return_type = return_type
-                    .type_infer(stack, ctx)
-                    .context("While inferring function return type")?;
-                Ok(TypeUnderConstruction::Function(
-                    arguments,
-                    Box::new(return_type),
-                ))
+                Ok(TypeUnderConstruction::Function(arguments))
             }
         }
     }
@@ -378,29 +372,24 @@ fn type_infer_function_call(
         TypeUnderConstruction::Var(_) => {
             let arg_var = ctx.fresh_var();
             let ret_var = ctx.fresh_var();
+
+            let args = LinkedList::singleton(TypeUnderConstruction::Var(ret_var.clone()));
+            let args = args.push(TypeUnderConstruction::Var(arg_var.clone()));
             ctx.add_constraint(Constraint::Equal(
                 function,
-                TypeUnderConstruction::Function(
-                    Box::new(LinkedList::singleton(TypeUnderConstruction::Var(
-                        arg_var.clone(),
-                    ))),
-                    Box::new(TypeUnderConstruction::Var(ret_var.clone())),
-                ),
-            ));
-            ctx.add_constraint(Constraint::Subtype(
-                argument,
-                TypeUnderConstruction::Var(arg_var),
+                TypeUnderConstruction::Function(Box::new(args)),
             ));
             Ok(TypeUnderConstruction::Var(ret_var))
         }
-        TypeUnderConstruction::Function(argument_types, return_type) => {
-            let (argument_type, argument_types) = argument_types.pop();
-            ctx.add_constraint(Constraint::Subtype(argument, argument_type));
-            match argument_types {
-                Some(argument_types) => {
-                    Ok(TypeUnderConstruction::Function(argument_types, return_type))
-                }
-                None => Ok(*return_type),
+        TypeUnderConstruction::Function(args) => {
+            let (arg, args) = args.pop();
+            ctx.add_constraint(Constraint::Subtype(argument, arg));
+
+            let args = args.expect("Functions always have a return type");
+            if args.len() > 1 {
+                Ok(TypeUnderConstruction::Function(args))
+            } else {
+                Ok(args.pop().0)
             }
         }
         _ => bail!(TypeInferenceError::IllegalArity),
@@ -439,16 +428,12 @@ impl TypeInfer for ExpressionValue {
                     .context("While inferring type of function body")?;
 
                 let out = match return_type {
-                    TypeUnderConstruction::Function(args, return_type) => {
-                        TypeUnderConstruction::Function(
-                            LinkedList::cons(argument_type, args),
-                            return_type,
-                        )
+                    TypeUnderConstruction::Function(args) => {
+                        TypeUnderConstruction::Function(LinkedList::cons(argument_type, args))
                     }
-                    _ => TypeUnderConstruction::Function(
-                        Box::new(LinkedList::singleton(argument_type)),
-                        Box::new(return_type),
-                    ),
+                    _ => TypeUnderConstruction::Function(Box::new(
+                        LinkedList::singleton(return_type).push(argument_type),
+                    )),
                 };
                 Ok(out)
             }

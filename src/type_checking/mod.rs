@@ -58,10 +58,7 @@ pub enum TypeUnderConstruction {
     Struct(SymbolOrPlaceholder, Vec<StructField>),
     Union(SymbolOrPlaceholder, Vec<UnionMember>),
     Tuple(Vec<TypeUnderConstruction>),
-    Function(
-        Box<LinkedList<TypeUnderConstruction>>,
-        Box<TypeUnderConstruction>,
-    ),
+    Function(Box<LinkedList<TypeUnderConstruction>>),
     RecurseMarker(TypeSymbol),
     Var(TypeVar),
 }
@@ -85,15 +82,14 @@ impl Display for TypeUnderConstruction {
                         .join(", ")
                 )
             }
-            TypeUnderConstruction::Function(args, return_type) => {
+            TypeUnderConstruction::Function(args) => {
                 write!(
                     f,
-                    "({}) -> {}",
+                    "({})",
                     args.iter()
                         .map(|e| e.to_string())
                         .collect::<Vec<_>>()
-                        .join(", "),
-                    return_type
+                        .join(" -> "),
                 )
             }
             TypeUnderConstruction::RecurseMarker(type_symbol) => write!(f, "{}<-", type_symbol),
@@ -107,7 +103,7 @@ pub enum Type {
     Struct(TypeSymbol, Vec<StructField>),
     Union(TypeSymbol, Vec<UnionMember>),
     Tuple(Vec<Type>),
-    Function(Box<LinkedList<Type>>, Box<Type>),
+    Function(Box<LinkedList<Type>>),
     RecurseMarker(TypeSymbol),
 }
 
@@ -130,15 +126,14 @@ impl Display for Type {
                         .join(", ")
                 )
             }
-            Self::Function(args, return_type) => {
+            Self::Function(args) => {
                 write!(
                     f,
-                    "({}) -> {}",
+                    "({})",
                     args.iter()
                         .map(|e| e.to_string())
                         .collect::<Vec<_>>()
-                        .join(", "),
-                    return_type
+                        .join(" -> "),
                 )
             }
             Self::RecurseMarker(type_symbol) => write!(f, "{}<-", type_symbol),
@@ -364,21 +359,15 @@ fn apply_substitution(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Type::Tuple(elements))
         }
-        TypeUnderConstruction::Function(args, return_value) => {
+        TypeUnderConstruction::Function(args) => {
             let args = args
                 .into_iter()
                 .map(|elm| apply_substitution(elm.clone(), substitutions))
                 .collect::<Result<Vec<_>, _>>()?;
-            let return_value = apply_substitution(*return_value, substitutions)?;
 
-            Ok(Type::Function(
-                Box::new(
-                    args.try_into().expect(
-                        "Args cannot be empty, as we just converted it from a linked list.",
-                    ),
-                ),
-                Box::new(return_value),
-            ))
+            Ok(Type::Function(Box::new(args.try_into().expect(
+                "Args cannot be empty, as we just converted it from a linked list.",
+            ))))
         }
         TypeUnderConstruction::RecurseMarker(symbol) => Ok(Type::RecurseMarker(symbol)),
         TypeUnderConstruction::Var(type_var) => {

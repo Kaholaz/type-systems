@@ -1,2 +1,2 @@
 Inf = [inf: Inf, end],
-f = Inf[inf=Inf[end]],
+f = \x:Inf.f
