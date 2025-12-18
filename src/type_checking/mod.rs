@@ -47,10 +47,10 @@ impl From<VariableName> for VariableSymbol {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeVar(usize);
 
-#[derive(Debug, Clone)]
-pub enum TypeOrVar {
-    Concrete(TypeUnderConstruction),
-    Var(TypeVar),
+impl Display for TypeVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "_typevar_{}", self.0)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -97,7 +97,7 @@ impl Display for TypeUnderConstruction {
                 )
             }
             TypeUnderConstruction::RecurseMarker(type_symbol) => write!(f, "{}<-", type_symbol),
-            TypeUnderConstruction::Var(var) => write!(f, "_{:?}", var),
+            TypeUnderConstruction::Var(var) => write!(f, "_{}", var),
         }
     }
 }
@@ -219,8 +219,8 @@ impl UnionMember {
 
 #[derive(Debug, Clone)]
 pub enum Constraint {
-    Equal(TypeOrVar, TypeOrVar),
-    Subtype(TypeOrVar, TypeOrVar),
+    Equal(TypeUnderConstruction, TypeUnderConstruction),
+    Subtype(TypeUnderConstruction, TypeUnderConstruction),
 }
 
 pub struct ConstraintContext {
@@ -241,12 +241,6 @@ impl ConstraintContext {
         self.next_var += 1;
         var
     }
-    fn tov_to_ty(tov: &TypeOrVar) -> TypeUnderConstruction {
-        match tov {
-            TypeOrVar::Concrete(ty) => ty.clone(),
-            TypeOrVar::Var(var) => TypeUnderConstruction::Var(var.clone()),
-        }
-    }
 
     fn print_constraints(constraints: &[Constraint]) {
         for constraint in constraints {
@@ -257,10 +251,10 @@ impl ConstraintContext {
     fn print_constraint(constraint: &Constraint) {
         let constraint = match constraint {
             Constraint::Equal(a, b) => {
-                format!("{} == {}", Self::tov_to_ty(a), Self::tov_to_ty(b))
+                format!("{} == {}", a, b)
             }
             Constraint::Subtype(a, b) => {
-                format!("{} <= {}", Self::tov_to_ty(a), Self::tov_to_ty(b))
+                format!("{} <= {}", a, b)
             }
         };
         println!("{}", constraint);
@@ -272,64 +266,9 @@ impl ConstraintContext {
 }
 
 #[derive(Debug, Clone, Error)]
-pub enum TypeError {
-    #[error("Type {0} is not known")]
-    UnknownType(TypeSymbol),
-
-    #[error("Variable {0:?} is not known")]
-    UnknownVariable(VariableSymbol),
-
-    #[error("Type {0} is already defined")]
-    DuplicateTypeDefinition(TypeSymbol),
-    #[error("Variable {0:?} is already defined")]
-    DuplicateVariableDefinition(VariableSymbol),
-    #[error("Encountered an unconstructable infinite type")]
-    UnconstructableInfiniteType,
-
-    #[error("Unification error")]
-    UnificationError,
-
+enum TypeError {
     #[error("Cannot find type in scope")]
     UnableToFindType,
-
-    #[error("Illegal function arity (attempted to apply a non function as a function)")]
-    IllegalArity,
-
-    #[error("Function arity mismatch: expected {expected} arguments, got {found}")]
-    FunctionArityMismatch { expected: usize, found: usize },
-
-    #[error("Tuple size mismatch: expected {expected} elements, got {found}")]
-    TupleSizeMismatch { expected: usize, found: usize },
-
-    #[error("Struct name mismatch: cannot unify '{left}' with '{right}'")]
-    StructNameMismatch {
-        left: SymbolOrPlaceholder,
-        right: SymbolOrPlaceholder,
-    },
-
-    #[error("Union name mismatch: cannot unify '{left}' with '{right}'")]
-    UnionNameMismatch {
-        left: SymbolOrPlaceholder,
-        right: SymbolOrPlaceholder,
-    },
-
-    #[error("Not all strut fields specified when constructing a struct")]
-    NotAllStructFieldsSpecified,
-
-    #[error("Cannot construct")]
-    CannotConstruct,
-
-    #[error("Union variant does not exist")]
-    VariantDoesNotExist,
-
-    #[error("Attempted to access a struct field of a non-struct")]
-    StructAccessOfNonStruct,
-
-    #[error("Cannot unify incompatible types:\n  Type 1: {left}\n  Type 2: {right}")]
-    IncompatibleTypes {
-        left: TypeUnderConstruction,
-        right: TypeUnderConstruction,
-    },
 }
 
 pub type TypeMap = HashMap<TypeMapSymbol, Type>;
