@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 /// This module defines AST nodes for the grammar. The grammar is defined in this way:
 ///
 /// <prog> ::= <def> {’,’ <def>}. // program is definition sequence
@@ -28,18 +30,20 @@
 /// | ’{’ [<vdef> {’,’ <vdef>}] ’}’. // struct field values
 use nonempty::NonEmpty;
 
+use crate::util::LinkedList;
+
 // *******************
 // * Top level nodes *
 // *******************
 /// program is definition sequence
 /// <prog> ::= <def> {’,’ <def>}
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program {
     pub definitions: NonEmpty<Declaration>,
 }
 
 /// <def> ::= ’@’ <file_name> | <tdef> | <vdef>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Declaration {
     IncludeDeclaration(FileName),
     TypeDeclaration(TypeDeclaration),
@@ -48,7 +52,7 @@ pub enum Declaration {
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
 /// ’@’ <file_name>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileName(String);
 impl FileName {
     pub fn new(s: impl Into<String>) -> Self {
@@ -65,7 +69,7 @@ impl FileName {
 // *********
 
 /// <tdef> ::= <tname> ’=’ ( <tnom> | <texp> ).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeDeclaration {
     /// <tname>
     pub type_name: TypeName,
@@ -76,7 +80,7 @@ pub struct TypeDeclaration {
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
 /// <tname> ’=’ <tnom> | <texp>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeName(String);
 impl TypeName {
     pub fn new(s: impl Into<String>) -> Self {
@@ -86,10 +90,20 @@ impl TypeName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn as_string(self) -> String {
+        self.0
+    }
+}
+
+impl Display for TypeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
 }
 
 /// <tnom> | <texp>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TypeDefinition {
     /// specify name of nominal type
     /// <tnom>
@@ -101,7 +115,7 @@ pub enum TypeDefinition {
 }
 
 /// <tnom> ::= ’{’ <decl> {’,’ <decl>} ’}’ | ’\[’ <elem> {’,’ <elem>} ’\]’
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NominalType {
     /// type of struct
     /// ’{’ <decl> {’,’ <decl>} ’}’
@@ -114,7 +128,7 @@ pub enum NominalType {
 
 /// field is of given type
 /// <decl> ::= <vname> ’:’ <texp>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StructFieldTypeDeclaration {
     pub field_name: VariableName,
     pub type_expression: TypeExpression,
@@ -122,24 +136,24 @@ pub struct StructFieldTypeDeclaration {
 
 /// simple label or typed field
 /// <elem> ::= <vname> [’:’ <texp>]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnumElementTypeDeclaration {
     pub element_name: VariableName,
     pub type_expression: Option<TypeExpression>,
 }
 
 /// <texp> ::= <tval> | <tval> ’->’ <texp>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TypeExpression {
     /// <tval>
     TypeValue(Box<TypeValue>),
     /// type of a function
     /// <tval> ’->’ <texp>
-    FunctionType(Box<TypeValue>, Box<TypeExpression>),
+    FunctionType(Box<LinkedList<TypeValue>>, Box<TypeValue>),
 }
 
 /// <tval> ::= <tname> | ’(’ <texp> {’,’ <texp>} ’)’
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TypeValue {
     /// name of type
     /// <tname>
@@ -155,7 +169,7 @@ pub enum TypeValue {
 // **********
 
 /// <vdef> ::= <vname> ’=’ <vexp>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VariableDeclaration {
     pub variable_name: VariableName,
     pub variable_definition: Expression,
@@ -163,7 +177,7 @@ pub struct VariableDeclaration {
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
 /// <vname> ’=’ <vexp>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VariableName(String);
 impl VariableName {
     pub fn new(s: impl Into<String>) -> Self {
@@ -173,16 +187,26 @@ impl VariableName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn as_string(self) -> String {
+        self.0
+    }
+}
+
+impl Display for VariableName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
 }
 
 /// <vexp> ::= <fval> | <vexp> <fval>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Expression {
-    pub values: Box<NonEmpty<ExpressionValue>>,
+    pub values: Box<LinkedList<ExpressionValue>>,
 }
 
 /// <fval> ::= ’\’ <decl> ’.’ <fval> | <val> | <tname> <spec>
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExpressionValue {
     /// function definition (lambda)
     /// ’\’ <decl> ’.’ <fval>
@@ -197,11 +221,15 @@ pub enum ExpressionValue {
 }
 
 /// <val> ::= <vname> | ’(’ <vexp> {’,’ <vexp>} ’)’ | <val> ’.’ <vname> | <val> ’[’ <vdef> {’,’ <vdef>} [’|’ <vexp>] ’]’
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
     /// content of variable (named value)
     /// <vname>
     Variable(VariableName),
+
+    /// paraenthesesized expression
+    /// ’(’ <vexp> ’)’
+    Expression(Expression),
 
     /// tuple or parentheses
     /// ’(’ <vexp> {’,’ <vexp>} ’)’
@@ -221,7 +249,7 @@ pub enum Value {
 }
 
 /// <spec> ::= ’[’ (<vdef> | <vname>) ’]’ | ’{’ [<vdef> {’,’ <vdef>}] ’}’
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Spec {
     /// union value
     /// ’[’ (<vdef> | <vname>) ’]’
@@ -233,7 +261,7 @@ pub enum Spec {
 }
 
 /// ’[’ (<vdef> | <vname>) ’]’
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UnionValue {
     /// <vdef>
     VariableDeclaration(VariableDeclaration),

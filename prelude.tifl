@@ -1,0 +1,39 @@
+PosInt = [0, pre: PosInt],
+NegInt = [-1, pre: NegInt],
+Int = [pos: PosInt, neg: NegInt],
+
+++ = \x:Int.x[
+  pos=\x:PosInt.Int[pos=PosInt[pre=x]],
+  neg=\x:NegInt.x[
+      -1=Int[pos=PosInt[0]],
+      pre=\pre:NegInt.Int[neg=pre]
+  ]
+],
+-- = \x:Int.x[
+  neg=\x:NegInt.Int[neg=NegInt[pre=x]],
+  pos=\x:PosInt.x[
+    0=Int[neg=NegInt[-1]],
+    pre=\pre:PosInt.Int[pos=pre]
+  ]
+],
+
++ = \a:Int.\b:Int.b[
+  pos=\pos:PosInt.pos[0=a | + (++ a) (-- b)]
+  | + (-- a) (++ b)
+],
+- = \a:Int.\b:Int.b[
+  pos=\pos:PosInt.pos[0=a | - (-- a) (-- b)]
+  | - (++ a) (++ b)
+],
+* = \a:Int.\b:Int.b[
+  pos=\pos:PosInt.pos[
+    0=Int[pos=PosInt[0]],
+    pre=\pre:PosInt.pre[
+      0=a
+      | + a (* a (-- b))
+    ]
+  ]
+  | * (- Int[pos=PosInt[0]] a) (- Int[pos=PosInt[0]] b)
+],
+
+f = \x:Int.f x,
