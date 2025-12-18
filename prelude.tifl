@@ -35,5 +35,3 @@ Int = [pos: PosInt, neg: NegInt],
   ]
   | * (- Int[pos=PosInt[0]] a) (- Int[pos=PosInt[0]] b)
 ],
-
-f = \x:Int.f x,

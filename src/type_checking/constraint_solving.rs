@@ -1,14 +1,44 @@
 use crate::{
     type_checking::{
-        Constraint, StructField, SymbolOrPlaceholder, TypeError, TypeOrVar, TypeUnderConstruction,
-        TypeVar, UnionMember,
+        Constraint, StructField, SymbolOrPlaceholder, TypeUnderConstruction, TypeVar, UnionMember,
     },
     util::LinkedList,
 };
 use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, VecDeque};
+use thiserror::Error;
 
 type Substitution = HashMap<TypeVar, TypeUnderConstruction>;
+
+#[derive(Debug, Clone, Error)]
+enum UnificationError {
+    #[error("Encountered an unconstructable infinite type: {ty}")]
+    UnconstructableInfiniteType { ty: TypeUnderConstruction },
+
+    #[error("Function arity mismatch: expected {expected} arguments, got {found}")]
+    FunctionArityMismatch { expected: usize, found: usize },
+
+    #[error("Tuple size mismatch: expected {expected} elements, got {found}")]
+    TupleSizeMismatch { expected: usize, found: usize },
+
+    #[error("Struct name mismatch: cannot unify '{left}' with '{right}'")]
+    StructNameMismatch {
+        left: SymbolOrPlaceholder,
+        right: SymbolOrPlaceholder,
+    },
+
+    #[error("Union name mismatch: cannot unify '{left}' with '{right}'")]
+    UnionNameMismatch {
+        left: SymbolOrPlaceholder,
+        right: SymbolOrPlaceholder,
+    },
+
+    #[error("Cannot unify incompatible types:\n  Type 1: {left}\n  Type 2: {right}")]
+    IncompatibleTypes {
+        left: TypeUnderConstruction,
+        right: TypeUnderConstruction,
+    },
+}
 
 pub fn solve_constraints(constraints: Vec<Constraint>) -> Result<Substitution> {
     let mut subst = Substitution::new();
@@ -17,14 +47,13 @@ pub fn solve_constraints(constraints: Vec<Constraint>) -> Result<Substitution> {
     while let Some(constraint) = remaining.pop_front() {
         match constraint {
             Constraint::Equal(ref t1, ref t2) => {
-                let t1_applied = apply_substitution_to_typeorvar(t1, &subst);
-                let t2_applied = apply_substitution_to_typeorvar(t2, &subst);
+                let t1_applied = apply_substitution(t1, &subst);
+                let t2_applied = apply_substitution(t2, &subst);
 
                 match (t1_applied.clone(), t2_applied.clone()) {
-                    (TypeOrVar::Var(v), TypeOrVar::Concrete(ty))
-                    | (TypeOrVar::Concrete(ty), TypeOrVar::Var(v)) => {
+                    (TypeUnderConstruction::Var(v), ty) | (ty, TypeUnderConstruction::Var(v)) => {
                         if occurs_check(&v, &ty) {
-                            bail!(TypeError::UnconstructableInfiniteType);
+                            bail!(UnificationError::UnconstructableInfiniteType { ty: ty.clone() });
                         }
                         subst.insert(v.clone(), ty.clone());
 
@@ -35,32 +64,13 @@ pub fn solve_constraints(constraints: Vec<Constraint>) -> Result<Substitution> {
                             .collect();
                     }
 
-                    (TypeOrVar::Concrete(ty1), TypeOrVar::Concrete(ty2)) => {
+                    (ty1, ty2) => {
                         unify(&ty1, &ty2, &mut remaining).with_context(|| {
-                            TypeError::IncompatibleTypes {
+                            UnificationError::IncompatibleTypes {
                                 left: ty1.clone(),
                                 right: ty2.clone(),
                             }
                         })?;
-                    }
-
-                    (TypeOrVar::Var(ty1), TypeOrVar::Var(ty2)) if ty1 == ty2 => {
-                        // Same variable, already unified
-                    }
-
-                    (TypeOrVar::Var(ty1), TypeOrVar::Var(ty2)) => {
-                        // This cannot be resolved jsut yet.
-                        if remaining.iter().all(|c| {
-                            matches!(c, Constraint::Equal(TypeOrVar::Var(_), TypeOrVar::Var(_)))
-                        }) {
-                            bail!(TypeError::IncompatibleTypes {
-                                left: TypeUnderConstruction::Var(ty1.clone()),
-                                right: TypeUnderConstruction::Var(ty2.clone())
-                            })
-                        }
-
-                        remaining
-                            .push_back(Constraint::Equal(TypeOrVar::Var(ty1), TypeOrVar::Var(ty2)));
                     }
                 }
             }
@@ -81,62 +91,53 @@ fn unify(
     constraints: &mut VecDeque<Constraint>,
 ) -> Result<()> {
     match (ty1, ty2) {
-        (TypeUnderConstruction::Var(ty1), TypeUnderConstruction::Var(ty2)) => {
+        (TypeUnderConstruction::Var(v1), TypeUnderConstruction::Var(v2)) => {
             constraints.push_back(Constraint::Equal(
-                TypeOrVar::Var(ty1.clone()),
-                TypeOrVar::Var(ty2.clone()),
+                TypeUnderConstruction::Var(v1.clone()),
+                TypeUnderConstruction::Var(v2.clone()),
             ));
             Ok(())
         }
-
-        // Variable substitutions should be handled by the caller
-        (TypeUnderConstruction::Var(_), _) | (_, TypeUnderConstruction::Var(_)) => Ok(()),
 
         (
             TypeUnderConstruction::Function(args1, ret1),
             TypeUnderConstruction::Function(args2, ret2),
         ) => {
             if args1.len() != args2.len() {
-                bail!(TypeError::FunctionArityMismatch {
+                bail!(UnificationError::FunctionArityMismatch {
                     expected: args1.len(),
                     found: args2.len()
                 });
             }
 
             for (a1, a2) in args1.iter().zip(args2.iter()) {
-                constraints.push_back(Constraint::Equal(
-                    TypeOrVar::Concrete(a1.clone()),
-                    TypeOrVar::Concrete(a2.clone()),
-                ));
+                constraints.push_back(Constraint::Equal(a1.clone(), a2.clone()));
             }
 
             constraints.push_back(Constraint::Equal(
-                TypeOrVar::Concrete(ret1.as_ref().clone()),
-                TypeOrVar::Concrete(ret2.as_ref().clone()),
+                ret1.as_ref().clone(),
+                ret2.as_ref().clone(),
             ));
             Ok(())
         }
 
         (TypeUnderConstruction::Tuple(elems1), TypeUnderConstruction::Tuple(elems2)) => {
             if elems1.len() != elems2.len() {
-                bail!(TypeError::TupleSizeMismatch {
+                bail!(UnificationError::TupleSizeMismatch {
                     expected: elems1.len(),
                     found: elems2.len()
                 });
             }
 
             for (e1, e2) in elems1.iter().zip(elems2.iter()) {
-                constraints.push_back(Constraint::Equal(
-                    TypeOrVar::Concrete(e1.clone()),
-                    TypeOrVar::Concrete(e2.clone()),
-                ));
+                constraints.push_back(Constraint::Equal(e1.clone(), e2.clone()));
             }
             Ok(())
         }
 
         (TypeUnderConstruction::Struct(n1, _), TypeUnderConstruction::Struct(n2, _)) => {
             if n1 != n2 {
-                bail!(TypeError::StructNameMismatch {
+                bail!(UnificationError::StructNameMismatch {
                     left: n1.clone(),
                     right: n2.clone(),
                 });
@@ -146,7 +147,7 @@ fn unify(
 
         (TypeUnderConstruction::Union(n1, _), TypeUnderConstruction::Union(n2, _)) => {
             if n1 != n2 {
-                bail!(TypeError::UnionNameMismatch {
+                bail!(UnificationError::UnionNameMismatch {
                     left: n1.clone(),
                     right: n2.clone(),
                 });
@@ -156,7 +157,7 @@ fn unify(
 
         (TypeUnderConstruction::RecurseMarker(s1), TypeUnderConstruction::RecurseMarker(s2)) => {
             if s1 != s2 {
-                bail!(TypeError::UnionNameMismatch {
+                bail!(UnificationError::UnionNameMismatch {
                     left: s1.clone().into(),
                     right: s2.clone().into()
                 });
@@ -173,7 +174,7 @@ fn unify(
             TypeUnderConstruction::RecurseMarker(s),
         ) => {
             if s != name {
-                bail!(TypeError::StructNameMismatch {
+                bail!(UnificationError::StructNameMismatch {
                     left: s.clone().into(),
                     right: name.clone().into()
                 });
@@ -190,7 +191,7 @@ fn unify(
             TypeUnderConstruction::RecurseMarker(s),
         ) => {
             if s != name {
-                bail!(TypeError::UnionNameMismatch {
+                bail!(UnificationError::UnionNameMismatch {
                     left: s.clone().into(),
                     right: name.clone().into()
                 });
@@ -199,7 +200,7 @@ fn unify(
         }
 
         (ty1, ty2) => {
-            bail!(TypeError::IncompatibleTypes {
+            bail!(UnificationError::IncompatibleTypes {
                 left: ty1.clone(),
                 right: ty2.clone()
             });
@@ -226,26 +227,11 @@ fn occurs_check(var: &TypeVar, ty: &TypeUnderConstruction) -> bool {
 
 fn apply_substitution_to_constraint(c: &Constraint, subst: &Substitution) -> Constraint {
     match c {
-        Constraint::Equal(t1, t2) => Constraint::Equal(
-            apply_substitution_to_typeorvar(t1, subst),
-            apply_substitution_to_typeorvar(t2, subst),
-        ),
-        Constraint::Subtype(t1, t2) => Constraint::Subtype(
-            apply_substitution_to_typeorvar(t1, subst),
-            apply_substitution_to_typeorvar(t2, subst),
-        ),
-    }
-}
-
-fn apply_substitution_to_typeorvar(tov: &TypeOrVar, subst: &Substitution) -> TypeOrVar {
-    match tov {
-        TypeOrVar::Concrete(t) => TypeOrVar::Concrete(apply_substitution(t, subst)),
-        TypeOrVar::Var(v) => {
-            if let Some(t) = subst.get(v) {
-                TypeOrVar::Concrete(apply_substitution(t, subst))
-            } else {
-                tov.clone()
-            }
+        Constraint::Equal(t1, t2) => {
+            Constraint::Equal(apply_substitution(t1, subst), apply_substitution(t2, subst))
+        }
+        Constraint::Subtype(t1, t2) => {
+            Constraint::Subtype(apply_substitution(t1, subst), apply_substitution(t2, subst))
         }
     }
 }
