@@ -12,28 +12,38 @@ type Substitution = HashMap<TypeVar, TypeUnderConstruction>;
 
 #[derive(Debug, Clone, Error)]
 enum UnificationError {
-    #[error("Encountered an unconstructable infinite type: {ty}")]
-    UnconstructableInfiniteType { ty: TypeUnderConstruction },
+    #[error(
+        "Infinite type detected: type variable '{var}' occurs within its own definition\n  This typically occurs when a function is defined recursively without a base case.\n\n  Attempted to unify: {var} = {ty}"
+    )]
+    UnconstructableInfiniteType {
+        var: TypeVar,
+        ty: TypeUnderConstruction,
+    },
 
-    #[error("Function arity mismatch: expected {expected} arguments, got {found}")]
-    FunctionArityMismatch { expected: usize, found: usize },
-
-    #[error("Tuple size mismatch: expected {expected} elements, got {found}")]
+    #[error(
+        "Tuple size mismatch: cannot unify tuples of different lengths\n  Expected: {expected} element(s)\n  Found: {found} element(s)"
+    )]
     TupleSizeMismatch { expected: usize, found: usize },
 
-    #[error("Struct name mismatch: cannot unify '{left}' with '{right}'")]
+    #[error(
+        "Struct name mismatch: cannot unify different struct types\n  Type 1: {left}\n  Type 2: {right}"
+    )]
     StructNameMismatch {
         left: SymbolOrPlaceholder,
         right: SymbolOrPlaceholder,
     },
 
-    #[error("Union name mismatch: cannot unify '{left}' with '{right}'")]
+    #[error(
+        "Union name mismatch: cannot unify different union types\n  Type 1: {left}\n  Type 2: {right}"
+    )]
     UnionNameMismatch {
         left: SymbolOrPlaceholder,
         right: SymbolOrPlaceholder,
     },
 
-    #[error("Cannot unify incompatible types:\n  Type 1: {left}\n  Type 2: {right}")]
+    #[error(
+        "Type mismatch: cannot unify incompatible type constructors\n  Type 1: {left}\n  Type 2: {right}"
+    )]
     IncompatibleTypes {
         left: TypeUnderConstruction,
         right: TypeUnderConstruction,
@@ -53,8 +63,12 @@ pub fn solve_constraints(constraints: Vec<Constraint>) -> Result<Substitution> {
                 match (t1_applied.clone(), t2_applied.clone()) {
                     (TypeUnderConstruction::Var(v), ty) | (ty, TypeUnderConstruction::Var(v)) => {
                         if occurs_check(&v, &ty) {
-                            bail!(UnificationError::UnconstructableInfiniteType { ty: ty.clone() });
+                            bail!(UnificationError::UnconstructableInfiniteType {
+                                var: v.clone(),
+                                ty: ty.clone(),
+                            });
                         }
+
                         subst.insert(v.clone(), ty.clone());
 
                         // Apply new substitution to remaining constraints
@@ -63,21 +77,19 @@ pub fn solve_constraints(constraints: Vec<Constraint>) -> Result<Substitution> {
                             .map(|c| apply_substitution_to_constraint(&c, &subst))
                             .collect();
                     }
-
                     (ty1, ty2) => {
-                        unify(&ty1, &ty2, &mut remaining).with_context(|| {
-                            UnificationError::IncompatibleTypes {
+                        unify(&ty1, &ty2, &mut remaining)
+                            .with_context(|| format!("While solving constraint {} = {}", ty1, ty2))
+                            .with_context(|| UnificationError::IncompatibleTypes {
                                 left: ty1.clone(),
                                 right: ty2.clone(),
-                            }
-                        })?;
+                            })?;
                     }
                 }
             }
-
             Constraint::Subtype(t1, t2) => {
                 // For now, treat subtype as equality
-                remaining.push_back(Constraint::Equal(t1, t2));
+                remaining.push_back(Constraint::Equal(t1.clone(), t2.clone()));
             }
         }
     }
@@ -98,35 +110,37 @@ fn unify(
             ));
             Ok(())
         }
-
-        (
-            TypeUnderConstruction::Function(args1, ret1),
-            TypeUnderConstruction::Function(args2, ret2),
-        ) => {
-            if args1.len() != args2.len() {
-                bail!(UnificationError::FunctionArityMismatch {
-                    expected: args1.len(),
-                    found: args2.len()
-                });
+        (TypeUnderConstruction::Function(args1), TypeUnderConstruction::Function(args2)) => {
+            match (args1.peek(), args2.peek()) {
+                ((arg1, Some(args1)), (arg2, Some(args2))) => {
+                    constraints.push_back(Constraint::Equal(arg1.clone(), arg2.clone()));
+                    constraints.push_back(Constraint::Equal(
+                        TypeUnderConstruction::Function(Box::new(args1.clone())),
+                        TypeUnderConstruction::Function(Box::new(args2.clone())),
+                    ));
+                }
+                ((arg1, None), (arg2, None)) => {
+                    constraints.push_back(Constraint::Equal(arg1.clone(), arg2.clone()));
+                }
+                ((ty, None), (arg, Some(args))) | ((arg, Some(args)), (ty, None)) => {
+                    constraints.push_back(Constraint::Equal(
+                        ty.clone(),
+                        TypeUnderConstruction::Function(Box::new(LinkedList::new(
+                            arg.clone(),
+                            args.clone(),
+                        ))),
+                    ));
+                }
             }
-
-            for (a1, a2) in args1.iter().zip(args2.iter()) {
-                constraints.push_back(Constraint::Equal(a1.clone(), a2.clone()));
-            }
-
-            constraints.push_back(Constraint::Equal(
-                ret1.as_ref().clone(),
-                ret2.as_ref().clone(),
-            ));
             Ok(())
         }
-
         (TypeUnderConstruction::Tuple(elems1), TypeUnderConstruction::Tuple(elems2)) => {
             if elems1.len() != elems2.len() {
-                bail!(UnificationError::TupleSizeMismatch {
+                return Err(UnificationError::TupleSizeMismatch {
                     expected: elems1.len(),
-                    found: elems2.len()
-                });
+                    found: elems2.len(),
+                })
+                .with_context(|| format!("Tuple types:\n  Type 1: {}\n  Type 2: {}", ty1, ty2))?;
             }
 
             for (e1, e2) in elems1.iter().zip(elems2.iter()) {
@@ -134,13 +148,22 @@ fn unify(
             }
             Ok(())
         }
-
-        (TypeUnderConstruction::Struct(n1, _), TypeUnderConstruction::Struct(n2, _)) => {
+        (
+            TypeUnderConstruction::Struct(n1, fields1),
+            TypeUnderConstruction::Struct(n2, fields2),
+        ) => {
             if n1 != n2 {
-                bail!(UnificationError::StructNameMismatch {
+                return Err(UnificationError::StructNameMismatch {
                     left: n1.clone(),
                     right: n2.clone(),
-                });
+                })
+                .with_context(|| {
+                    format!(
+                        "Cannot unify structs with different names:\n  Struct 1 has {} field(s)\n  Struct 2 has {} field(s)",
+                        fields1.len(),
+                        fields2.len()
+                    )
+                })?;
             }
             Ok(())
         }
@@ -154,17 +177,16 @@ fn unify(
             }
             Ok(())
         }
-
         (TypeUnderConstruction::RecurseMarker(s1), TypeUnderConstruction::RecurseMarker(s2)) => {
             if s1 != s2 {
-                bail!(UnificationError::UnionNameMismatch {
+                return Err(UnificationError::UnionNameMismatch {
                     left: s1.clone().into(),
-                    right: s2.clone().into()
-                });
+                    right: s2.clone().into(),
+                })
+                .context("Cannot unify different recursive type markers")?;
             }
             Ok(())
         }
-
         (
             TypeUnderConstruction::RecurseMarker(s),
             TypeUnderConstruction::Struct(SymbolOrPlaceholder::Symbol(name), _),
@@ -181,7 +203,6 @@ fn unify(
             }
             Ok(())
         }
-
         (
             TypeUnderConstruction::RecurseMarker(s),
             TypeUnderConstruction::Union(SymbolOrPlaceholder::Symbol(name), _),
@@ -191,29 +212,25 @@ fn unify(
             TypeUnderConstruction::RecurseMarker(s),
         ) => {
             if s != name {
-                bail!(UnificationError::UnionNameMismatch {
+                return Err(UnificationError::UnionNameMismatch {
                     left: s.clone().into(),
-                    right: name.clone().into()
-                });
+                    right: name.clone().into(),
+                })
+                .context("Recursive type marker does not match union name")?;
             }
             Ok(())
         }
-
-        (ty1, ty2) => {
-            bail!(UnificationError::IncompatibleTypes {
-                left: ty1.clone(),
-                right: ty2.clone()
-            });
-        }
+        (ty1, ty2) => bail!(UnificationError::IncompatibleTypes {
+            left: ty1.clone(),
+            right: ty2.clone(),
+        }),
     }
 }
 
 fn occurs_check(var: &TypeVar, ty: &TypeUnderConstruction) -> bool {
     match ty {
         TypeUnderConstruction::Var(v) => v == var,
-        TypeUnderConstruction::Function(args, ret) => {
-            args.iter().any(|arg| occurs_check(var, arg)) || occurs_check(var, ret)
-        }
+        TypeUnderConstruction::Function(args) => args.iter().any(|arg| occurs_check(var, arg)),
         TypeUnderConstruction::Tuple(elems) => elems.iter().any(|e| occurs_check(var, e)),
         TypeUnderConstruction::Struct(_, fields) => {
             fields.iter().any(|f| occurs_check(var, &f.field_type))
@@ -246,10 +263,18 @@ fn apply_substitution(ty: &TypeUnderConstruction, subst: &Substitution) -> TypeU
                 ty.clone()
             }
         }
-        TypeUnderConstruction::Function(args, ret) => TypeUnderConstruction::Function(
-            Box::new(apply_substitution_to_args(args, subst)),
-            Box::new(apply_substitution(ret, subst)),
-        ),
+        TypeUnderConstruction::Function(args) => {
+            let args = args
+                .iter()
+                .map(|a| apply_substitution(a, subst))
+                .collect::<Vec<_>>();
+
+            let args = args
+                .try_into()
+                .expect("We had arguments before, I they did not disappear");
+            TypeUnderConstruction::Function(Box::new(args))
+        }
+
         TypeUnderConstruction::Tuple(elems) => TypeUnderConstruction::Tuple(
             elems.iter().map(|e| apply_substitution(e, subst)).collect(),
         ),
@@ -278,17 +303,5 @@ fn apply_substitution(ty: &TypeUnderConstruction, subst: &Substitution) -> TypeU
                 .collect(),
         ),
         TypeUnderConstruction::RecurseMarker(_) => ty.clone(),
-    }
-}
-
-fn apply_substitution_to_args(
-    args: &LinkedList<TypeUnderConstruction>,
-    subst: &Substitution,
-) -> LinkedList<TypeUnderConstruction> {
-    let (head, tail) = args.peek();
-    let head = apply_substitution(head, subst);
-    match tail {
-        Some(tail) => LinkedList::new(head, apply_substitution_to_args(tail, subst)),
-        None => LinkedList::singleton(head),
     }
 }
