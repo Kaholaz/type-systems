@@ -371,6 +371,10 @@ fn type_infer_function_call(
                 function,
                 TypeUnderConstruction::Function(Box::new(args)),
             ))?;
+            ctx.add_constraint(Constraint::Subtype(
+                argument,
+                TypeUnderConstruction::Var(arg_var.clone()),
+            ))?;
             Ok(TypeUnderConstruction::Var(ret_var))
         }
         TypeUnderConstruction::Function(args) => {
