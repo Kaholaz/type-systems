@@ -7,7 +7,7 @@ use crate::{
     parser::{ParserError, TERMINATING_CHARACTERS, scanner::Scanner},
     util::LinkedList,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use nonempty::NonEmpty;
 
 pub trait Parsable
@@ -50,11 +50,10 @@ impl Parsable for Declaration {
     fn parse(scanner: &mut Scanner) -> Result<Self> {
         scanner.skip_whitespace();
         if scanner.is_at_end() {
-            return Err(ParserError {
+            bail!(ParserError {
                 message: "unexpected EOF when parsing declarations".to_string(),
                 span: scanner.line_and_column(),
-            }
-            .into());
+            });
         }
 
         let c = *scanner
@@ -92,11 +91,10 @@ impl Parsable for FileName {
             scanner.advance()?;
         }
         if file_name.is_empty() {
-            return Err(ParserError {
+            bail!(ParserError {
                 message: "expected filename".to_string(),
                 span: scanner.line_and_column(),
-            }
-            .into());
+            });
         }
         Ok(Self::new(file_name.into_iter().collect::<String>()))
     }
@@ -112,11 +110,10 @@ impl Parsable for TypeDeclaration {
             TypeName::parse(scanner).context("failed to parse type name in type declaration")?;
 
         if *scanner.current_char()? != '=' {
-            return Err(ParserError {
+            bail!(ParserError {
                 message: "expected `=` in type declaration".to_string(),
                 span: scanner.line_and_column(),
-            }
-            .into());
+            });
         }
         scanner
             .advance_and_skip_whitespace()
@@ -136,11 +133,10 @@ impl Parsable for TypeDeclaration {
 impl Parsable for TypeName {
     fn parse(scanner: &mut Scanner) -> Result<Self> {
         if !scanner.current_char()?.is_uppercase() {
-            return Err(ParserError {
+            bail!(ParserError {
                 message: "type names must start with an uppercase letter".to_string(),
                 span: scanner.line_and_column(),
-            }
-            .into());
+            });
         }
         let type_name = scanner.get_chars_until_whitespace();
         Ok(TypeName::new(type_name))
@@ -386,11 +382,10 @@ impl Parsable for VariableName {
     fn parse(scanner: &mut Scanner) -> Result<Self> {
         let variable_name = scanner.get_chars_until_whitespace();
         if variable_name.is_empty() {
-            return Err(ParserError {
+            bail!(ParserError {
                 message: "expected variable identifier".to_string(),
                 span: scanner.line_and_column(),
-            }
-            .into());
+            });
         }
 
         if variable_name
@@ -399,11 +394,10 @@ impl Parsable for VariableName {
             .expect("the length of the string has already been checked")
             .is_uppercase()
         {
-            return Err(ParserError {
+            bail!(ParserError {
                 message: "expected variable identifier, got type identifier".to_string(),
                 span: scanner.line_and_column(),
-            }
-            .into());
+            });
         }
 
         Ok(VariableName::new(variable_name))
