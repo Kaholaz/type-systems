@@ -6,7 +6,7 @@ use crate::{
     type_checking::{constraint_solving::solve_constraints, type_inference::generate_constraints},
     util::LinkedList,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use thiserror::Error;
 
 mod constraint_solving;
@@ -34,6 +34,12 @@ impl From<TypeName> for TypeSymbol {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariableSymbol {
     name: String,
+}
+
+impl Display for VariableSymbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", &self.name)
+    }
 }
 
 impl From<VariableName> for VariableSymbol {
@@ -212,6 +218,30 @@ impl UnionMember {
     }
 }
 
+impl PartialEq for TypeUnderConstruction {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Struct(l0, _), Self::Struct(r0, _)) => l0 == r0,
+            (Self::Union(l0, _), Self::Union(r0, _)) => l0 == r0,
+            (Self::Tuple(l0), Self::Tuple(r0)) => l0 == r0,
+            (Self::Function(l0), Self::Function(r0)) => {
+                l0.len() == r0.len() && l0.iter().zip(r0.iter()).all(|(a, b)| a == b)
+            }
+            (Self::RecurseMarker(l0), Self::RecurseMarker(r0)) => l0 == r0,
+            (Self::Var(l0), Self::Var(r0)) => l0 == r0,
+            (Self::RecurseMarker(l0), Self::Struct(SymbolOrPlaceholder::Symbol(r0), _))
+            | (Self::Struct(SymbolOrPlaceholder::Symbol(l0), _), Self::RecurseMarker(r0)) => {
+                l0 == r0
+            }
+            (Self::RecurseMarker(l0), Self::Union(SymbolOrPlaceholder::Symbol(r0), _))
+            | (Self::Union(SymbolOrPlaceholder::Symbol(l0), _), Self::RecurseMarker(r0)) => {
+                l0 == r0
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Constraint {
     Equal(TypeUnderConstruction, TypeUnderConstruction),
@@ -255,8 +285,38 @@ impl ConstraintContext {
         println!("{}", constraint);
     }
 
-    fn add_constraint(&mut self, constraint: Constraint) {
-        self.constraints.push(constraint);
+    fn add_constraint(&mut self, constraint: Constraint) -> Result<()> {
+        match constraint {
+            Constraint::Equal(a, b) if is_pure_type(&a) && is_pure_type(&b) => {
+                if a == b {
+                    Ok(())
+                } else {
+                    bail!("Types differ: {} and {}", a, b)
+                }
+            }
+            Constraint::Subtype(a, b) if is_pure_type(&a) && is_pure_type(&b) => {
+                if a == b {
+                    Ok(())
+                } else {
+                    bail!("{} is not a subtype of {}'", a, b)
+                }
+            }
+            _ => {
+                self.constraints.push(constraint);
+                Ok(())
+            }
+        }
+    }
+}
+
+fn is_pure_type(ty: &TypeUnderConstruction) -> bool {
+    match ty {
+        TypeUnderConstruction::Var(_) => false,
+        TypeUnderConstruction::Struct(_, _)
+        | TypeUnderConstruction::Union(_, _)
+        | TypeUnderConstruction::RecurseMarker(_) => true,
+        TypeUnderConstruction::Tuple(elements) => elements.iter().all(is_pure_type),
+        TypeUnderConstruction::Function(args) => args.iter().all(is_pure_type),
     }
 }
 
