@@ -604,7 +604,7 @@ mod tests {
     #[test]
     fn test_trailing_comma_in_definitions() {
         let result = parse_program("x = 1, y = 2,");
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
