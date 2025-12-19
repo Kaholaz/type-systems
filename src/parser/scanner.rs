@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use anyhow::{Result, bail};
+
 use crate::parser::{ParserError, RESERVED_CHARACTERS};
 
 #[derive(Clone)]
@@ -32,14 +34,17 @@ impl Scanner {
         }
     }
 
-    pub fn current_char(&self) -> Result<&char, ParserError> {
-        self.input.get(self.pos).ok_or(ParserError {
-            message: "unexpected EOF while scanning source".to_string(),
-            span: self.line_and_column,
-        })
+    pub fn current_char(&self) -> Result<&char> {
+        match self.input.get(self.pos) {
+            Some(char) => Ok(char),
+            None => bail!(ParserError {
+                message: "unexpected EOF while scanning source".to_string(),
+                span: self.line_and_column,
+            }),
+        }
     }
 
-    pub fn advance(&mut self) -> Result<(), ParserError> {
+    pub fn advance(&mut self) -> Result<()> {
         if *self.current_char()? == '\n' {
             self.line_and_column.new_line();
         } else {
@@ -49,7 +54,7 @@ impl Scanner {
         Ok(())
     }
 
-    pub fn advance_and_skip_whitespace(&mut self) -> Result<(), ParserError> {
+    pub fn advance_and_skip_whitespace(&mut self) -> Result<()> {
         self.advance()?;
         self.skip_whitespace();
         Ok(())
@@ -75,13 +80,9 @@ impl Scanner {
         out.iter().collect()
     }
 
-    pub fn expect_character(
-        &mut self,
-        character: char,
-        error_message: String,
-    ) -> Result<(), ParserError> {
+    pub fn expect_character(&mut self, character: char, error_message: String) -> Result<()> {
         if *self.current_char()? != character {
-            return Err(ParserError {
+            bail!(ParserError {
                 message: error_message,
                 span: self.line_and_column,
             });
