@@ -6,23 +6,23 @@ use crate::{
     },
     type_checking::{
         Constraint, ConstraintContext, StructField, SymbolOrPlaceholder, TypeMapSymbol, TypeSymbol,
-        TypeUnderConstruction, UnionMember, VariableSymbol,
+        TypeUnderConstruction, UnionMember, VariableSymbol, is_pure_type,
     },
     util::LinkedList,
 };
 use anyhow::{Context, Result, bail};
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
 pub enum TypeInferenceError {
-    #[error("Unknown variable '{0:?}' - variable not found in current scope or any parent scope")]
+    #[error("Unknown variable '{0}' - variable not found in current scope or any parent scope")]
     UnknownVariable(VariableSymbol),
 
     #[error("Unknown type '{0}' - type not declared or not in scope")]
     UnknownType(TypeSymbol),
 
-    #[error("Duplicate variable definition '{0:?}' - variable already defined in this scope")]
+    #[error("Duplicate variable definition '{0}' - variable already defined in this scope")]
     DuplicateVariableDefinition(VariableSymbol),
 
     #[error("Duplicate type definition '{0}' - type already defined in this scope")]
@@ -33,7 +33,7 @@ pub enum TypeInferenceError {
     )]
     IllegalArity,
 
-    #[error("Struct field '{0:?}' does not exist on this struct type")]
+    #[error("Struct field '{0}' does not exist on this struct type")]
     StructFieldDoesNotExist(VariableSymbol),
 
     #[error(
@@ -46,7 +46,7 @@ pub enum TypeInferenceError {
     )]
     NotAllStructFieldsSpecified,
 
-    #[error("Union variant '{0:?}' does not exist on this union type")]
+    #[error("Union variant '{0}' does not exist on this union type")]
     VariantDoesNotExist(VariableSymbol),
 
     #[error("Cannot construct type - type definition and initializer structure are incompatible")]
@@ -55,10 +55,27 @@ pub enum TypeInferenceError {
     #[error("Pattern match (case) expression must be performed on a Union type, not other types")]
     CasesOfNonUnionType,
 
-    #[error(
-        "Pattern match incomplete - variant '{0:?}' is not handled and no default case provided"
-    )]
+    #[error("Pattern match incomplete - variant '{0}' is not handled and no default case provided")]
     CaseNotCovered(VariableSymbol),
+
+    #[error("Branches produces different types: {0}")]
+    UnificationError(DisplayTypes),
+}
+
+#[derive(Debug, Clone)]
+pub struct DisplayTypes(Vec<TypeUnderConstruction>);
+impl Display for DisplayTypes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.0
+                .iter()
+                .map(|t| format!("'{}'", t))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    }
 }
 
 type TypeFrame = HashMap<TypeMapSymbol, TypeUnderConstruction>;
@@ -78,7 +95,7 @@ fn lookup_symbol<'a>(
         Some(t) => Ok(t),
         None => match prev {
             Some(prev) => lookup_symbol(prev, symbol)
-                .with_context(|| format!("While searching parent scopes for symbol {:?}", symbol)),
+                .with_context(|| format!("While searching parent scopes for symbol {}", symbol)),
             None => match symbol {
                 TypeMapSymbol::VariableSymbol(v) => {
                     bail!(TypeInferenceError::UnknownVariable(v.clone()))
@@ -125,10 +142,7 @@ pub fn generate_constraints(program: &Program) -> Result<(TypeFrame, Vec<Constra
                     TypeUnderConstruction::Var(var),
                 )
                 .with_context(|| {
-                    format!(
-                        "While registering variable declaration '{:?}'",
-                        variable_name
-                    )
+                    format!("While registering variable declaration '{}'", variable_name)
                 })?;
             }
             _ => {}
@@ -149,9 +163,8 @@ pub fn generate_constraints(program: &Program) -> Result<(TypeFrame, Vec<Constra
 
                 let ty = match type_definition
                     .type_infer(&stack, &mut ctx)
-                    .with_context(|| {
-                        format!("While inferring type definition for '{}'", type_name)
-                    })? {
+                    .with_context(|| format!("Type '{}' is illegaly defined", type_name))?
+                {
                     TypeUnderConstruction::Struct(_, fields) => {
                         TypeUnderConstruction::Struct(type_name.clone().into(), fields)
                     }
@@ -177,11 +190,9 @@ pub fn generate_constraints(program: &Program) -> Result<(TypeFrame, Vec<Constra
 
                 let inferred_type = variable_definition
                     .type_infer(&stack, &mut ctx)
-                    .with_context(|| {
-                        format!("While inferring type for variable '{:?}'", variable_name)
-                    })?;
+                    .with_context(|| format!("Could not infer type of '{}'", variable_name))?;
 
-                ctx.add_constraint(Constraint::Equal(var_type.clone(), inferred_type.clone()));
+                ctx.add_constraint(Constraint::Equal(var_type.clone(), inferred_type.clone()))?;
 
                 stack
                     .frame
@@ -208,12 +219,8 @@ impl TypeInfer for TypeDefinition {
         ctx: &mut ConstraintContext,
     ) -> Result<TypeUnderConstruction> {
         match self {
-            TypeDefinition::NominalType(nominal_type) => nominal_type
-                .type_infer(stack, ctx)
-                .context("While inferring nominal type"),
-            TypeDefinition::TypeExpression(tyexpression) => tyexpression
-                .type_infer(stack, ctx)
-                .context("While inferring type expression"),
+            TypeDefinition::NominalType(nominal_type) => nominal_type.type_infer(stack, ctx),
+            TypeDefinition::TypeExpression(tyexpression) => tyexpression.type_infer(stack, ctx),
         }
     }
 }
@@ -236,7 +243,7 @@ impl TypeInfer for NominalType {
                     let struct_field = StructField {
                         name: field_name.clone().into(),
                         field_type: type_expression.type_infer(stack, ctx).with_context(|| {
-                            format!("While inferring type for struct field '{:?}'", field_name)
+                            format!("Struct field '{}' illegaly defined", field_name)
                         })?,
                     };
                     fields.push(struct_field);
@@ -258,10 +265,7 @@ impl TypeInfer for NominalType {
                         Some(member_type) => UnionMember::UnionMember(
                             element_name.clone().into(),
                             member_type.type_infer(stack, ctx).with_context(|| {
-                                format!(
-                                    "While inferring type for union variant '{:?}'",
-                                    element_name
-                                )
+                                format!("Union variant '{}' illegaly defined", element_name)
                             })?,
                         ),
                         None => UnionMember::SingletonUnionMember(element_name.clone().into()),
@@ -284,12 +288,9 @@ impl TypeInfer for TypeExpression {
         ctx: &mut ConstraintContext,
     ) -> Result<TypeUnderConstruction> {
         match self {
-            TypeExpression::TypeValue(tyvalue) => tyvalue
-                .type_infer(stack, ctx)
-                .context("While inferring type value"),
+            TypeExpression::TypeValue(type_value) => type_value.type_infer(stack, ctx),
             TypeExpression::FunctionType(arguments) => {
-                let arguments = type_infer_arguments(arguments, stack, ctx)
-                    .context("While inferring function argument types")?;
+                let arguments = type_infer_arguments(arguments, stack, ctx)?;
                 Ok(TypeUnderConstruction::Function(arguments))
             }
         }
@@ -302,9 +303,7 @@ fn type_infer_arguments(
     ctx: &mut ConstraintContext,
 ) -> Result<Box<LinkedList<TypeUnderConstruction>>> {
     let (arg, next) = arguments.peek();
-    let arg = arg
-        .type_infer(stack, ctx)
-        .context("While inferring argument type in function signature")?;
+    let arg = arg.type_infer(stack, ctx)?;
     match next {
         Some(next) => {
             let next = type_infer_arguments(next, stack, ctx)?;
@@ -321,18 +320,11 @@ impl TypeInfer for TypeValue {
         ctx: &mut ConstraintContext,
     ) -> Result<TypeUnderConstruction> {
         match self {
-            TypeValue::TypeName(tyname) => lookup_symbol(stack, &(tyname.clone().into()))
-                .with_context(|| format!("While looking up type name '{}'", tyname))
-                .cloned(),
+            TypeValue::TypeName(tyname) => lookup_symbol(stack, &(tyname.clone().into())).cloned(),
             TypeValue::TypeTuple(tuple_members) => {
                 let tuple_members = tuple_members
                     .iter()
-                    .enumerate()
-                    .map(|(i, m)| {
-                        m.type_infer(stack, ctx).with_context(|| {
-                            format!("While inferring type for tuple element at index {}", i)
-                        })
-                    })
+                    .map(|m| m.type_infer(stack, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(TypeUnderConstruction::Tuple(tuple_members))
             }
@@ -347,16 +339,16 @@ impl TypeInfer for Expression {
         ctx: &mut ConstraintContext,
     ) -> Result<TypeUnderConstruction> {
         let (function, args) = self.values.peek();
-        let mut value = function
-            .type_infer(stack, ctx)
-            .context("While inferring type of function expression")?;
+        let mut value = function.type_infer(stack, ctx)?;
 
         for (i, arg) in args.iter().flat_map(|args| args.iter()).enumerate() {
             let arg = arg.type_infer(stack, ctx).with_context(|| {
-                format!("While inferring type of argument {} in function call", i)
+                format!(
+                    "Cannot infer type of argument at index {} in function call",
+                    i
+                )
             })?;
-            value = type_infer_function_call(value, arg, stack, ctx)
-                .with_context(|| format!("While applying argument {} to function", i))?;
+            value = type_infer_function_call(value, arg, stack, ctx)?
         }
         Ok(value)
     }
@@ -378,12 +370,12 @@ fn type_infer_function_call(
             ctx.add_constraint(Constraint::Equal(
                 function,
                 TypeUnderConstruction::Function(Box::new(args)),
-            ));
+            ))?;
             Ok(TypeUnderConstruction::Var(ret_var))
         }
         TypeUnderConstruction::Function(args) => {
             let (arg, args) = args.pop();
-            ctx.add_constraint(Constraint::Subtype(argument, arg));
+            ctx.add_constraint(Constraint::Subtype(argument, arg))?;
 
             let args = args.expect("Functions always have a return type");
             if args.len() > 1 {
@@ -410,12 +402,7 @@ impl TypeInfer for ExpressionValue {
                 } = declaration;
 
                 let mut frame = TypeFrame::new();
-                let argument_type = argument_type.type_infer(stack, ctx).with_context(|| {
-                    format!(
-                        "While inferring type for function parameter '{:?}'",
-                        argument_name
-                    )
-                })?;
+                let argument_type = argument_type.type_infer(stack, ctx)?;
                 frame.insert(argument_name.clone().into(), argument_type.clone());
 
                 let stack = &TypeStack {
@@ -423,9 +410,7 @@ impl TypeInfer for ExpressionValue {
                     prev: Some(stack),
                 };
 
-                let return_type = function_body
-                    .type_infer(stack, ctx)
-                    .context("While inferring type of function body")?;
+                let return_type = function_body.type_infer(stack, ctx)?;
 
                 let out = match return_type {
                     TypeUnderConstruction::Function(args) => {
@@ -437,17 +422,13 @@ impl TypeInfer for ExpressionValue {
                 };
                 Ok(out)
             }
-            ExpressionValue::ValueExpression(value) => value
-                .type_infer(stack, ctx)
-                .context("While inferring type of value expression"),
+            ExpressionValue::ValueExpression(value) => value.type_infer(stack, ctx),
             ExpressionValue::TypeExpression(tyname, spec) => {
-                let ty = lookup_symbol(stack, &tyname.clone().into()).with_context(|| {
-                    format!("While looking up type '{}' for construction", tyname)
-                })?;
+                let ty = lookup_symbol(stack, &tyname.clone().into())?;
 
                 match (ty, spec) {
                     (
-                        TypeUnderConstruction::Struct(struct_name, tyfields),
+                        TypeUnderConstruction::Struct(struct_name, type_fields),
                         Spec::StructValue(spec_fields),
                     ) => {
                         let mut spec = Vec::new();
@@ -459,30 +440,29 @@ impl TypeInfer for ExpressionValue {
                             let field = StructField {
                                 name: variable_name.clone().into(),
                                 field_type: variable_definition.type_infer(stack, ctx)
-                                    .with_context(|| format!("While inferring type for struct field '{:?}' in constructor", variable_name))?,
+                                    .with_context(|| format!("While inferring type for struct field '{}' in struct constructor", variable_name))?,
                             };
                             spec.push(field)
                         }
 
-                        let all_fields_are_present =
-                            tyfields.iter().all(|StructField { name, field_type }| {
-                                let spec_type = spec.iter().find(|sf| &sf.name == name);
-                                if let Some(spec_type) = spec_type {
-                                    ctx.add_constraint(Constraint::Subtype(
-                                        spec_type.field_type.clone(),
-                                        field_type.clone(),
-                                    ));
-                                    true
-                                } else {
-                                    false
-                                }
-                            });
+                        let mut all_fields_are_present = true;
+                        for StructField { name, field_type } in type_fields {
+                            let spec_type = spec.iter().find(|sf| &sf.name == name);
+                            if let Some(spec_type) = spec_type {
+                                ctx.add_constraint(Constraint::Subtype(
+                                    spec_type.field_type.clone(),
+                                    field_type.clone(),
+                                ))?;
+                            } else {
+                                all_fields_are_present = false
+                            }
+                        }
 
                         if all_fields_are_present {
                             Ok(ty.clone())
                         } else {
                             Err(TypeInferenceError::NotAllStructFieldsSpecified).with_context(
-                                || format!("While constructing struct type '{:?}'", struct_name),
+                                || format!("While constructing struct type '{}'", struct_name),
                             )?
                         }
                     }
@@ -499,8 +479,8 @@ impl TypeInfer for ExpressionValue {
                                 Some(variable_definition.type_infer(stack, ctx).with_context(
                                     || {
                                         format!(
-                                            "While inferring type for union variant '{:?}' payload",
-                                            variable_name
+                                            "Cannot create union variant '{}' of union '{}'",
+                                            variable_name, union_name
                                         )
                                     },
                                 )?),
@@ -513,18 +493,18 @@ impl TypeInfer for ExpressionValue {
                         let union_member = union_members.iter().find(|m| m.name() == &spec_name);
                         match union_member {
                             None => Err(TypeInferenceError::VariantDoesNotExist(spec_name.clone()))
-                                .with_context(|| format!("While constructing union type '{:?}'", union_name))?,
+                                .with_context(|| format!("Cannot construct union of '{}'", union_name))?,
                             Some(union_member) => match (union_member.member_type(), spec_type) {
                                 (None, None) => Ok(ty.clone()),
                                 (Some(union_member_type), Some(spec_type)) => {
                                     ctx.add_constraint(Constraint::Subtype(
                                         spec_type,
                                         union_member_type.clone(),
-                                    ));
+                                    ))?;
                                     Ok(ty.clone())
                                 }
                                 (_, _) => Err(TypeInferenceError::CannotConstruct)
-                                    .with_context(|| format!("Mismatch between union variant '{:?}' definition and provided value", spec_name))?,
+                                    .with_context(|| format!("Mismatch between union variant '{}' definition and provided value", spec_name))?,
                             },
                         }
                     }
@@ -542,18 +522,16 @@ impl TypeInfer for Value {
         ctx: &mut ConstraintContext,
     ) -> Result<TypeUnderConstruction> {
         match self {
-            Value::Variable(variable_name) => lookup_symbol(stack, &variable_name.clone().into())
-                .with_context(|| format!("While looking up variable '{:?}'", variable_name))
-                .cloned(),
-            Value::Expression(expression) => expression
-                .type_infer(stack, ctx)
-                .context("While inferring type of nested expression"),
+            Value::Variable(variable_name) => {
+                lookup_symbol(stack, &variable_name.clone().into()).cloned()
+            }
+            Value::Expression(expression) => expression.type_infer(stack, ctx),
             Value::Tuple(elements) => elements
                 .iter()
                 .enumerate()
                 .map(|(i, e)| {
                     e.type_infer(stack, ctx).with_context(|| {
-                        format!("While inferring type for tuple element at position {}", i)
+                        format!("Cannot infer type of tuple element at index {}", i)
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()
@@ -561,21 +539,18 @@ impl TypeInfer for Value {
             Value::StructAccess(value, variable_name) => {
                 let value = value
                     .type_infer(stack, ctx)
-                    .context("While inferring type of struct being accessed")?;
+                    .context("Failed to infer type of struct before struct access")?;
 
                 let fields = match value {
-                    TypeUnderConstruction::Struct(_, fields) => Ok(fields),
+                    TypeUnderConstruction::Struct(_, fields) => fields,
                     TypeUnderConstruction::RecurseMarker(s) => {
                         match lookup_symbol(stack, &s.into())? {
-                            TypeUnderConstruction::Struct(_, fields) => Ok(fields.clone()),
-                            _ => Err(TypeInferenceError::StructAccessOfNonStruct),
+                            TypeUnderConstruction::Struct(_, fields) => fields.clone(),
+                            _ => bail!(TypeInferenceError::StructAccessOfNonStruct),
                         }
                     }
-                    _ => Err(TypeInferenceError::StructAccessOfNonStruct),
-                }
-                .with_context(|| {
-                    format!("While attempting to access field '{:?}'", variable_name)
-                })?;
+                    _ => bail!(TypeInferenceError::StructAccessOfNonStruct),
+                };
 
                 match fields
                     .iter()
@@ -587,51 +562,48 @@ impl TypeInfer for Value {
                     ))
                     .with_context(|| {
                         format!(
-                            "Available fields: {:?}",
-                            fields.iter().map(|f| &f.name).collect::<Vec<_>>()
+                            "Available fields: {}",
+                            fields
+                                .iter()
+                                .map(|f| format!("'{}'", f.name))
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         )
                     })?,
                 }
             }
             Value::Case(value, explicit_cases_ast, default_case) => {
-                let value = value
-                    .type_infer(stack, ctx)
-                    .context("While inferring type of value being pattern matched")?;
+                let value = value.type_infer(stack, ctx)?;
 
-                let members = match value {
-                    TypeUnderConstruction::Union(_, members) => Ok(members),
+                let (union_name, members) = match value {
+                    TypeUnderConstruction::Union(union_name, members) => (union_name, members),
                     TypeUnderConstruction::RecurseMarker(s) => {
                         match lookup_symbol(stack, &s.into())? {
-                            TypeUnderConstruction::Union(_, members) => Ok(members.clone()),
-                            _ => Err(TypeInferenceError::CasesOfNonUnionType),
+                            TypeUnderConstruction::Union(union_name, members) => {
+                                (union_name.clone(), members.clone())
+                            }
+                            _ => bail!(TypeInferenceError::CasesOfNonUnionType),
                         }
                     }
-                    _ => Err(TypeInferenceError::CasesOfNonUnionType),
-                }
-                .context("Pattern match case expression requires a union type")?;
+                    _ => bail!(TypeInferenceError::CasesOfNonUnionType),
+                };
 
                 let mut explicit_cases = Vec::new();
                 for explicit_case in explicit_cases_ast {
                     let explicit_case: (VariableSymbol, _) = (
                         explicit_case.variable_name.clone().into(),
-                        explicit_case
-                            .variable_definition
-                            .type_infer(stack, ctx)
-                            .with_context(|| {
-                                format!(
-                                    "While inferring type for case handler of variant '{:?}'",
-                                    explicit_case.variable_name
-                                )
-                            })?,
+                        explicit_case.variable_definition.type_infer(stack, ctx)?,
                     );
                     explicit_cases.push(explicit_case)
                 }
 
                 let default_case = match default_case {
-                    Some(exp) => Some(
-                        exp.type_infer(stack, ctx)
-                            .context("While inferring type for default case handler")?,
-                    ),
+                    Some(exp) => {
+                        let out = exp
+                            .type_infer(stack, ctx)
+                            .context("Could not infer type of default case")?;
+                        Some(out)
+                    }
                     None => None,
                 };
 
@@ -650,43 +622,53 @@ impl TypeInfer for Value {
                             member_type.clone(),
                             stack,
                             ctx,
-                        )
-                        .with_context(|| {
-                            format!(
-                                "While applying case handler to variant '{:?}'",
-                                member.name()
-                            )
-                        })?
+                        )?
                     } else {
                         match explicit_case.or(default_case.as_ref()).cloned() {
                             Some(case) => case,
                             None => Err(TypeInferenceError::CaseNotCovered(member.name().clone()))
                                 .with_context(|| {
                                     let covered_cases: Vec<_> = explicit_cases.iter().map(|(s, _)| s).collect();
-                                    format!("Pattern match incomplete. Covered variants: {:?}, Has default: {}", 
-                                        covered_cases, default_case.is_some())
+                                    format!("Pattern match incomplete. Covered variants: {}, Has default: {}", 
+                                        covered_cases.iter().map(|c| format!("'{}'", c)).collect::<Vec<_>>().join(", "), default_case.is_some())
                                 })?,
                         }
                     };
                     cases.push(case);
                 }
 
-                join(&cases, ctx).context("While joining result types from all case branches")
+                join(&cases, ctx)
+                    .context(format!("Could not unify cases for Union '{}'", union_name))
             }
         }
     }
 }
 
-fn join<'a>(
-    elements: impl IntoIterator<Item = &'a TypeUnderConstruction>,
+fn join(
+    elements: &Vec<TypeUnderConstruction>,
     ctx: &mut ConstraintContext,
 ) -> Result<TypeUnderConstruction> {
+    if elements.iter().all(is_pure_type) {
+        let mut elms = elements.iter();
+        let first = elms.next().expect("cannot join zero types");
+        let (equal, _) = elms.fold((true, first), |(equal, prev), curr| {
+            (equal && prev == curr, curr)
+        });
+        if equal {
+            return Ok(first.clone());
+        } else {
+            bail!(TypeInferenceError::UnificationError(DisplayTypes(
+                elements.to_vec()
+            )))
+        }
+    }
+
     let var = ctx.fresh_var();
     for elm in elements {
         ctx.add_constraint(Constraint::Subtype(
             elm.clone(),
             TypeUnderConstruction::Var(var.clone()),
-        ));
+        ))?;
     }
     Ok(TypeUnderConstruction::Var(var))
 }

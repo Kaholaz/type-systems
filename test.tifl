@@ -1,2 +1,8 @@
 Inf = [inf: Inf, end],
-f = \x:Inf.f
+
+a = \a:Inf.(
+  fst a id
+),
+
+id = \id:Inf.id,
+fst = \fst:Inf.(\scd:Inf.fst),

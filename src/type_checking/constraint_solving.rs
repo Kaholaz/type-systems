@@ -42,7 +42,7 @@ enum UnificationError {
     },
 
     #[error(
-        "Type mismatch: cannot unify incompatible type constructors\n  Type 1: {left}\n  Type 2: {right}"
+        "Type mismatch: failed to unify incompatible types\n  Type 1: {left}\n  Type 2: {right}"
     )]
     IncompatibleTypes {
         left: TypeUnderConstruction,

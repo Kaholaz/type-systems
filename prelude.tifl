@@ -10,7 +10,7 @@ Int = [pos: PosInt, neg: NegInt],
   ]
 ],
 -- = \x:Int.x[
-  neg=\x:NegInt.Int[neg=PosInt[pre=x]],
+  neg=\x:NegInt.Int[neg=NegInt[pre=x]],
   pos=\x:PosInt.x[
     0=Int[neg=NegInt[-1]],
     pre=\pre:PosInt.Int[pos=pre]
