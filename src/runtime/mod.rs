@@ -39,6 +39,47 @@ impl Display for RuntimeValue {
             RuntimeValue::UnionValue {
                 union_name,
                 union_value,
+            } if union_name.as_str() == "Int" => {
+                let UnionValue::UnionValue { member_name, value } = union_value else {
+                    panic!("Illegal int value.")
+                };
+                if member_name.as_str() == "pos" {
+                    let mut num = 0_isize;
+                    let mut cur = value.as_ref();
+                    while let RuntimeValue::UnionValue {
+                        union_name: _,
+                        union_value:
+                            UnionValue::UnionValue {
+                                member_name: _,
+                                value,
+                            },
+                    } = cur
+                    {
+                        num += 1;
+                        cur = value.as_ref();
+                    }
+                    write!(f, "{}", num)
+                } else {
+                    let mut num = -1_isize;
+                    let mut cur = value.as_ref();
+                    while let RuntimeValue::UnionValue {
+                        union_name: _,
+                        union_value:
+                            UnionValue::UnionValue {
+                                member_name: _,
+                                value,
+                            },
+                    } = cur
+                    {
+                        num -= 1;
+                        cur = value.as_ref();
+                    }
+                    write!(f, "{}", num)
+                }
+            }
+            RuntimeValue::UnionValue {
+                union_name,
+                union_value,
             } => match union_value {
                 UnionValue::SingularUnionValue { member_name } => {
                     write!(f, "{}[{}]", union_name, member_name)
