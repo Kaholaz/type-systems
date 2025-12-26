@@ -2,11 +2,11 @@ use crate::{
     ast::{
         Declaration, EnumElementTypeDeclaration, Expression, ExpressionValue, NominalType, Program,
         Spec, StructFieldTypeDeclaration, TypeDeclaration, TypeDefinition, TypeExpression,
-        TypeValue, UnionValue, Value, VariableDeclaration,
+        TypeName, TypeValue, UnionValue, Value, VariableDeclaration, VariableName,
     },
     type_checking::{
-        Constraint, ConstraintContext, StructField, SymbolOrPlaceholder, TypeMapSymbol, TypeSymbol,
-        TypeUnderConstruction, UnionMember, VariableSymbol, is_pure_type,
+        Constraint, ConstraintContext, StructField, TypeMapSymbol, TypeNameOrPlaceholder,
+        TypeUnderConstruction, UnionMember, is_pure_type,
     },
     util::LinkedList,
 };
@@ -17,16 +17,16 @@ use thiserror::Error;
 #[derive(Error, Debug, Clone)]
 pub enum TypeInferenceError {
     #[error("Unknown variable '{0}' - variable not found in current scope or any parent scope")]
-    UnknownVariable(VariableSymbol),
+    UnknownVariable(VariableName),
 
     #[error("Unknown type '{0}' - type not declared or not in scope")]
-    UnknownType(TypeSymbol),
+    UnknownType(TypeName),
 
     #[error("Duplicate variable definition '{0}' - variable already defined in this scope")]
-    DuplicateVariableDefinition(VariableSymbol),
+    DuplicateVariableDefinition(VariableName),
 
     #[error("Duplicate type definition '{0}' - type already defined in this scope")]
-    DuplicateTypeDefinition(TypeSymbol),
+    DuplicateTypeDefinition(TypeName),
 
     #[error(
         "Illegal function arity - attempted to call a non-function value or provided wrong number of arguments"
@@ -34,7 +34,7 @@ pub enum TypeInferenceError {
     IllegalArity,
 
     #[error("Struct field '{0}' does not exist on this struct type")]
-    StructFieldDoesNotExist(VariableSymbol),
+    StructFieldDoesNotExist(VariableName),
 
     #[error(
         "Attempted to access field on a non-struct type - only struct types support field access"
@@ -47,7 +47,7 @@ pub enum TypeInferenceError {
     NotAllStructFieldsSpecified,
 
     #[error("Union variant '{0}' does not exist on this union type")]
-    VariantDoesNotExist(VariableSymbol),
+    VariantDoesNotExist(VariableName),
 
     #[error("Cannot construct type - type definition and initializer structure are incompatible")]
     CannotConstruct,
@@ -56,7 +56,7 @@ pub enum TypeInferenceError {
     CasesOfNonUnionType,
 
     #[error("Pattern match incomplete - variant '{0}' is not handled and no default case provided")]
-    CaseNotCovered(VariableSymbol),
+    CaseNotCovered(VariableName),
 
     #[error("Branches produces different types: {0}")]
     UnificationError(DisplayTypes),
@@ -130,7 +130,7 @@ pub fn generate_constraints(program: &Program) -> Result<(TypeFrame, Vec<Constra
                 insert(
                     &mut frame,
                     type_name.clone().into(),
-                    TypeUnderConstruction::RecurseMarker(type_name.clone().into()),
+                    TypeUnderConstruction::RecurseMarker(type_name.clone()),
                 )
                 .with_context(|| format!("While registering type declaration '{}'", type_name))?;
             }
@@ -241,7 +241,7 @@ impl TypeInfer for NominalType {
                     } = field;
 
                     let struct_field = StructField {
-                        name: field_name.clone().into(),
+                        name: field_name.clone(),
                         field_type: type_expression.type_infer(stack, ctx).with_context(|| {
                             format!("Struct field '{}' illegaly defined", field_name)
                         })?,
@@ -249,7 +249,7 @@ impl TypeInfer for NominalType {
                     fields.push(struct_field);
                 }
                 Ok(TypeUnderConstruction::Struct(
-                    SymbolOrPlaceholder::Placeholder,
+                    TypeNameOrPlaceholder::Placeholder,
                     fields,
                 ))
             }
@@ -263,17 +263,17 @@ impl TypeInfer for NominalType {
 
                     let member = match type_expression {
                         Some(member_type) => UnionMember::UnionMember(
-                            element_name.clone().into(),
+                            element_name.clone(),
                             member_type.type_infer(stack, ctx).with_context(|| {
                                 format!("Union variant '{}' illegaly defined", element_name)
                             })?,
                         ),
-                        None => UnionMember::SingletonUnionMember(element_name.clone().into()),
+                        None => UnionMember::SingletonUnionMember(element_name.clone()),
                     };
                     members.push(member)
                 }
                 Ok(TypeUnderConstruction::Union(
-                    SymbolOrPlaceholder::Placeholder,
+                    TypeNameOrPlaceholder::Placeholder,
                     members,
                 ))
             }
@@ -442,7 +442,7 @@ impl TypeInfer for ExpressionValue {
                         } in spec_fields
                         {
                             let field = StructField {
-                                name: variable_name.clone().into(),
+                                name: variable_name.clone(),
                                 field_type: variable_definition.type_infer(stack, ctx)
                                     .with_context(|| format!("While inferring type for struct field '{}' in struct constructor", variable_name))?,
                             };
@@ -479,7 +479,7 @@ impl TypeInfer for ExpressionValue {
                                 variable_name,
                                 variable_definition,
                             }) => (
-                                variable_name.clone().into(),
+                                variable_name.clone(),
                                 Some(variable_definition.type_infer(stack, ctx).with_context(
                                     || {
                                         format!(
@@ -490,7 +490,7 @@ impl TypeInfer for ExpressionValue {
                                 )?),
                             ),
                             UnionValue::VariableName(variable_name) => {
-                                (variable_name.clone().into(), None)
+                                (variable_name.clone(), None)
                             }
                         };
 
@@ -556,13 +556,10 @@ impl TypeInfer for Value {
                     _ => bail!(TypeInferenceError::StructAccessOfNonStruct),
                 };
 
-                match fields
-                    .iter()
-                    .find(|&f| f.name == variable_name.clone().into())
-                {
+                match fields.iter().find(|&f| f.name == variable_name.clone()) {
                     Some(field) => Ok(field.field_type.clone()),
                     None => Err(TypeInferenceError::StructFieldDoesNotExist(
-                        variable_name.clone().into(),
+                        variable_name.clone(),
                     ))
                     .with_context(|| {
                         format!(
@@ -594,8 +591,8 @@ impl TypeInfer for Value {
 
                 let mut explicit_cases = Vec::new();
                 for explicit_case in explicit_cases_ast {
-                    let explicit_case: (VariableSymbol, _) = (
-                        explicit_case.variable_name.clone().into(),
+                    let explicit_case: (VariableName, _) = (
+                        explicit_case.variable_name.clone(),
                         explicit_case.variable_definition.type_infer(stack, ctx)?,
                     );
                     explicit_cases.push(explicit_case)

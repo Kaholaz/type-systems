@@ -13,44 +13,6 @@ mod constraint_solving;
 mod type_inference;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeSymbol {
-    name: String,
-}
-
-impl Display for TypeSymbol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.name)
-    }
-}
-
-impl From<TypeName> for TypeSymbol {
-    fn from(value: TypeName) -> Self {
-        TypeSymbol {
-            name: value.as_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct VariableSymbol {
-    name: String,
-}
-
-impl Display for VariableSymbol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.name)
-    }
-}
-
-impl From<VariableName> for VariableSymbol {
-    fn from(value: VariableName) -> Self {
-        VariableSymbol {
-            name: value.as_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeVar(usize);
 
 impl Display for TypeVar {
@@ -61,11 +23,11 @@ impl Display for TypeVar {
 
 #[derive(Debug, Clone)]
 pub enum TypeUnderConstruction {
-    Struct(SymbolOrPlaceholder, Vec<StructField>),
-    Union(SymbolOrPlaceholder, Vec<UnionMember>),
+    Struct(TypeNameOrPlaceholder, Vec<StructField>),
+    Union(TypeNameOrPlaceholder, Vec<UnionMember>),
     Tuple(Vec<TypeUnderConstruction>),
     Function(Box<LinkedList<TypeUnderConstruction>>),
-    RecurseMarker(TypeSymbol),
+    RecurseMarker(TypeName),
     Var(TypeVar),
 }
 
@@ -106,11 +68,11 @@ impl Display for TypeUnderConstruction {
 
 #[derive(Debug, Clone)]
 pub enum Type {
-    Struct(TypeSymbol, Vec<StructField>),
-    Union(TypeSymbol, Vec<UnionMember>),
+    Struct(TypeName, Vec<StructField>),
+    Union(TypeName, Vec<UnionMember>),
     Tuple(Vec<Type>),
     Function(Box<LinkedList<Type>>),
-    RecurseMarker(TypeSymbol),
+    RecurseMarker(TypeName),
 }
 
 impl Display for Type {
@@ -149,31 +111,31 @@ impl Display for Type {
 
 #[derive(Debug, Clone)]
 pub struct StructField {
-    pub name: VariableSymbol,
+    pub name: VariableName,
     pub field_type: TypeUnderConstruction,
 }
 #[derive(Debug, Clone)]
 pub enum UnionMember {
-    SingletonUnionMember(VariableSymbol),
-    UnionMember(VariableSymbol, TypeUnderConstruction),
+    SingletonUnionMember(VariableName),
+    UnionMember(VariableName, TypeUnderConstruction),
 }
 
 #[derive(Debug, Clone)]
-pub enum SymbolOrPlaceholder {
-    Symbol(TypeSymbol),
+pub enum TypeNameOrPlaceholder {
+    Symbol(TypeName),
     Placeholder,
 }
 
-impl Display for SymbolOrPlaceholder {
+impl Display for TypeNameOrPlaceholder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SymbolOrPlaceholder::Symbol(type_symbol) => write!(f, "{}", type_symbol.name),
-            SymbolOrPlaceholder::Placeholder => write!(f, "_"),
+            TypeNameOrPlaceholder::Symbol(type_symbol) => write!(f, "{}", type_symbol.as_str()),
+            TypeNameOrPlaceholder::Placeholder => write!(f, "_"),
         }
     }
 }
 
-impl PartialEq for SymbolOrPlaceholder {
+impl PartialEq for TypeNameOrPlaceholder {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Symbol(a), Self::Symbol(b)) => a == b,
@@ -182,22 +144,16 @@ impl PartialEq for SymbolOrPlaceholder {
     }
 }
 
-impl Eq for SymbolOrPlaceholder {}
+impl Eq for TypeNameOrPlaceholder {}
 
-impl From<TypeSymbol> for SymbolOrPlaceholder {
-    fn from(value: TypeSymbol) -> Self {
-        SymbolOrPlaceholder::Symbol(value)
-    }
-}
-
-impl From<TypeName> for SymbolOrPlaceholder {
+impl From<TypeName> for TypeNameOrPlaceholder {
     fn from(value: TypeName) -> Self {
-        SymbolOrPlaceholder::Symbol(value.into())
+        TypeNameOrPlaceholder::Symbol(value)
     }
 }
 
 impl UnionMember {
-    pub fn name(&self) -> &VariableSymbol {
+    pub fn name(&self) -> &VariableName {
         match self {
             UnionMember::SingletonUnionMember(symbol) => symbol,
             UnionMember::UnionMember(symbol, _) => symbol,
@@ -229,12 +185,12 @@ impl PartialEq for TypeUnderConstruction {
             }
             (Self::RecurseMarker(l0), Self::RecurseMarker(r0)) => l0 == r0,
             (Self::Var(l0), Self::Var(r0)) => l0 == r0,
-            (Self::RecurseMarker(l0), Self::Struct(SymbolOrPlaceholder::Symbol(r0), _))
-            | (Self::Struct(SymbolOrPlaceholder::Symbol(l0), _), Self::RecurseMarker(r0)) => {
+            (Self::RecurseMarker(l0), Self::Struct(TypeNameOrPlaceholder::Symbol(r0), _))
+            | (Self::Struct(TypeNameOrPlaceholder::Symbol(l0), _), Self::RecurseMarker(r0)) => {
                 l0 == r0
             }
-            (Self::RecurseMarker(l0), Self::Union(SymbolOrPlaceholder::Symbol(r0), _))
-            | (Self::Union(SymbolOrPlaceholder::Symbol(l0), _), Self::RecurseMarker(r0)) => {
+            (Self::RecurseMarker(l0), Self::Union(TypeNameOrPlaceholder::Symbol(r0), _))
+            | (Self::Union(TypeNameOrPlaceholder::Symbol(l0), _), Self::RecurseMarker(r0)) => {
                 l0 == r0
             }
             _ => false,
@@ -330,40 +286,28 @@ pub type TypeMap = HashMap<TypeMapSymbol, Type>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeMapSymbol {
-    TypeSymbol(TypeSymbol),
-    VariableSymbol(VariableSymbol),
+    TypeSymbol(TypeName),
+    VariableSymbol(VariableName),
 }
 
 impl Display for TypeMapSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TypeSymbol(type_symbol) => write!(f, "{}", type_symbol.name),
-            Self::VariableSymbol(variable_symbol) => write!(f, "{}", variable_symbol.name),
+            Self::TypeSymbol(type_symbol) => write!(f, "{}", type_symbol.as_str()),
+            Self::VariableSymbol(variable_symbol) => write!(f, "{}", variable_symbol.as_str()),
         }
-    }
-}
-
-impl From<VariableSymbol> for TypeMapSymbol {
-    fn from(value: VariableSymbol) -> Self {
-        TypeMapSymbol::VariableSymbol(value)
-    }
-}
-
-impl From<TypeSymbol> for TypeMapSymbol {
-    fn from(value: TypeSymbol) -> Self {
-        TypeMapSymbol::TypeSymbol(value)
     }
 }
 
 impl From<VariableName> for TypeMapSymbol {
     fn from(value: VariableName) -> Self {
-        Into::<VariableSymbol>::into(value).into()
+        TypeMapSymbol::VariableSymbol(value)
     }
 }
 
 impl From<TypeName> for TypeMapSymbol {
     fn from(value: TypeName) -> Self {
-        Into::<TypeSymbol>::into(value).into()
+        TypeMapSymbol::TypeSymbol(value)
     }
 }
 
@@ -394,20 +338,20 @@ fn apply_substitution(
     match ty {
         TypeUnderConstruction::Struct(symbol_or_placeholder, struct_fields) => {
             match symbol_or_placeholder {
-                SymbolOrPlaceholder::Symbol(type_symbol) => {
+                TypeNameOrPlaceholder::Symbol(type_symbol) => {
                     Ok(Type::Struct(type_symbol, struct_fields))
                 }
-                SymbolOrPlaceholder::Placeholder => {
+                TypeNameOrPlaceholder::Placeholder => {
                     panic!("We should never encounter placeholders. This is a bug!")
                 }
             }
         }
         TypeUnderConstruction::Union(symbol_or_placeholder, union_members) => {
             match symbol_or_placeholder {
-                SymbolOrPlaceholder::Symbol(type_symbol) => {
+                TypeNameOrPlaceholder::Symbol(type_symbol) => {
                     Ok(Type::Union(type_symbol, union_members))
                 }
-                SymbolOrPlaceholder::Placeholder => {
+                TypeNameOrPlaceholder::Placeholder => {
                     panic!("We should never encounter placeholders. This is a bug!")
                 }
             }

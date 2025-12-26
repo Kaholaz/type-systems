@@ -80,7 +80,7 @@ pub struct TypeDeclaration {
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
 /// <tname> ’=’ <tnom> | <texp>
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeName(String);
 impl TypeName {
     pub fn new(s: impl Into<String>) -> Self {
@@ -177,7 +177,7 @@ pub struct VariableDeclaration {
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
 /// <vname> ’=’ <vexp>
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariableName(String);
 impl VariableName {
     pub fn new(s: impl Into<String>) -> Self {

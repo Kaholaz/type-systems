@@ -1,6 +1,6 @@
 use crate::{
     type_checking::{
-        Constraint, StructField, SymbolOrPlaceholder, TypeUnderConstruction, TypeVar, UnionMember,
+        Constraint, StructField, TypeNameOrPlaceholder, TypeUnderConstruction, TypeVar, UnionMember,
     },
     util::LinkedList,
 };
@@ -29,16 +29,16 @@ enum UnificationError {
         "Struct name mismatch: cannot unify different struct types\n  Type 1: {left}\n  Type 2: {right}"
     )]
     StructNameMismatch {
-        left: SymbolOrPlaceholder,
-        right: SymbolOrPlaceholder,
+        left: TypeNameOrPlaceholder,
+        right: TypeNameOrPlaceholder,
     },
 
     #[error(
         "Union name mismatch: cannot unify different union types\n  Type 1: {left}\n  Type 2: {right}"
     )]
     UnionNameMismatch {
-        left: SymbolOrPlaceholder,
-        right: SymbolOrPlaceholder,
+        left: TypeNameOrPlaceholder,
+        right: TypeNameOrPlaceholder,
     },
 
     #[error(
@@ -189,10 +189,10 @@ fn unify(
         }
         (
             TypeUnderConstruction::RecurseMarker(s),
-            TypeUnderConstruction::Struct(SymbolOrPlaceholder::Symbol(name), _),
+            TypeUnderConstruction::Struct(TypeNameOrPlaceholder::Symbol(name), _),
         )
         | (
-            TypeUnderConstruction::Struct(SymbolOrPlaceholder::Symbol(name), _),
+            TypeUnderConstruction::Struct(TypeNameOrPlaceholder::Symbol(name), _),
             TypeUnderConstruction::RecurseMarker(s),
         ) => {
             if s != name {
@@ -205,10 +205,10 @@ fn unify(
         }
         (
             TypeUnderConstruction::RecurseMarker(s),
-            TypeUnderConstruction::Union(SymbolOrPlaceholder::Symbol(name), _),
+            TypeUnderConstruction::Union(TypeNameOrPlaceholder::Symbol(name), _),
         )
         | (
-            TypeUnderConstruction::Union(SymbolOrPlaceholder::Symbol(name), _),
+            TypeUnderConstruction::Union(TypeNameOrPlaceholder::Symbol(name), _),
             TypeUnderConstruction::RecurseMarker(s),
         ) => {
             if s != name {
