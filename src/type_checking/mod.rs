@@ -208,6 +208,7 @@ pub enum TypeError {
     #[error("Cannot find type in scope")]
     UnableToFindType,
 }
+pub type TypeFrame<'a> = HashMap<TypeMapSymbol, TypeVarId>;
 pub type TypeEnv<'a> = LinkedList<&'a HashMap<TypeMapSymbol, TypeVarId>>;
 
 impl<'a> TypeEnv<'a> {
@@ -233,10 +234,18 @@ impl<'a> TypeEnv<'a> {
         ctx: &UnificationContext,
         variable_name: VariableName,
     ) -> Result<PartialType> {
+        if is_int_literal(&variable_name) {
+            return self.lookup_type(ctx, TypeName::new("Int"));
+        }
+
         let key = variable_name.clone().into();
         self.lookup(ctx, &key)?
             .ok_or(DriverError::UnknownVariable { variable_name }.into())
     }
+}
+
+fn is_int_literal(variable_name: &VariableName) -> bool {
+    variable_name.as_str().parse::<isize>().is_ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -273,6 +282,10 @@ pub fn type_check(program: &Program) -> Result<HashMap<TypeMapSymbol, Type>> {
     let mut type_definitions = Vec::new();
     let mut variable_definitions = Vec::new();
 
+    // Insert predefined types
+    let mut id_to_type_name = HashMap::new();
+    insert_int_type(&mut ctx, &mut stack_frame, &mut id_to_type_name);
+
     // Collect all type variables
     for statement in &program.definitions {
         match statement {
@@ -293,7 +306,6 @@ pub fn type_check(program: &Program) -> Result<HashMap<TypeMapSymbol, Type>> {
 
     let env = LinkedList::singleton(&stack_frame);
 
-    let mut id_to_type_name = HashMap::new();
     for TypeDeclaration {
         type_name,
         type_definition,
@@ -326,4 +338,64 @@ pub fn type_check(program: &Program) -> Result<HashMap<TypeMapSymbol, Type>> {
         out.insert(symbol.clone(), typ);
     }
     Ok(out)
+}
+
+fn insert_int_type(
+    ctx: &mut UnificationContext,
+    frame: &mut TypeFrame,
+    id_to_type_name: &mut HashMap<TypeId, TypeName>,
+) {
+    let pos_int_var = ctx.new_type_var();
+    let pos_int_type_id = ctx.new_type_id();
+    let pos_int = PartialType::Union(
+        pos_int_type_id,
+        vec![
+            PartialUnionMember::SingletonUnionMember(VariableName::new("0")),
+            PartialUnionMember::UnionMember(
+                VariableName::new("pre"),
+                PartialType::Var(pos_int_var),
+            ),
+        ],
+    );
+    ctx.unify_partial(pos_int, PartialType::Var(pos_int_var))
+        .expect("This should run on a fresh environment, thus being deterministic");
+    frame.insert(TypeName::new("PosInt").into(), pos_int_var);
+    id_to_type_name.insert(pos_int_type_id, TypeName::new("PosInt"));
+
+    let neg_int_var = ctx.new_type_var();
+    let neg_int_type_id = ctx.new_type_id();
+    let neg_int = PartialType::Union(
+        neg_int_type_id,
+        vec![
+            PartialUnionMember::SingletonUnionMember(VariableName::new("-1")),
+            PartialUnionMember::UnionMember(
+                VariableName::new("pre"),
+                PartialType::Var(neg_int_var),
+            ),
+        ],
+    );
+    ctx.unify_partial(neg_int, PartialType::Var(neg_int_var))
+        .expect("This should run on a fresh environment, thus being deterministic");
+    frame.insert(TypeName::new("NegInt").into(), neg_int_var);
+    id_to_type_name.insert(neg_int_type_id, TypeName::new("NegInt"));
+
+    let int_var = ctx.new_type_var();
+    let int_type_id = ctx.new_type_id();
+    let int = PartialType::Union(
+        int_type_id,
+        vec![
+            PartialUnionMember::UnionMember(
+                VariableName::new("pos"),
+                PartialType::Var(pos_int_var),
+            ),
+            PartialUnionMember::UnionMember(
+                VariableName::new("neg"),
+                PartialType::Var(neg_int_var),
+            ),
+        ],
+    );
+    ctx.unify_partial(int, PartialType::Var(int_var))
+        .expect("This should run on a fresh environment, thus being deterministic");
+    frame.insert(TypeName::new("Int").into(), int_var);
+    id_to_type_name.insert(int_type_id, TypeName::new("Int"));
 }
