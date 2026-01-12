@@ -1,6 +1,25 @@
+Bool = [true, false],
+true = Bool[true],
+false = Bool[true],
+
 PosInt = [0, pre: PosInt],
 NegInt = [-1, pre: NegInt],
 Int = [pos: PosInt, neg: NegInt],
+
+0 = Int[pos=PosInt[0]],
+
+~ = \x:Bool.x[
+  true=false,
+  false=true
+],
+| = \a:Bool.\b:Bool.a[
+  true=true,
+  false=b
+],
+& = \a:Bool.\b:Bool.a[
+  true=b,
+  false=false
+],
 
 ++ = \x:Int.x[
   pos=\x:PosInt.Int[pos=PosInt[pre=x]],
@@ -15,6 +34,10 @@ Int = [pos: PosInt, neg: NegInt],
     0=Int[neg=NegInt[-1]],
     pre=\pre:PosInt.Int[pos=pre]
   ]
+],
+abs = \x:Int.x[
+  neg=\_:NegInt.(- 0 x),
+  pos=\_:PosInt.x
 ],
 
 + = \a:Int.\b:Int.b[
@@ -35,3 +58,18 @@ Int = [pos: PosInt, neg: NegInt],
   ]
   | * (- Int[pos=PosInt[0]] a) (- Int[pos=PosInt[0]] b)
 ],
+
+eq = \a:Int.\b:Int.(- a b)[
+  pos=\pos:PosInt.pos[0=true | false]
+  | false
+],
+gt = \a:Int.\b:Int.(- a b)[
+  pos=\pos:PosInt.pos[0=false | true]
+  | false
+],
+lt = \a:Int.\b:Int.(- a b)[
+  pos=\pos:PosInt.false
+  | true
+],
+ge = \a:Int.\b:Int.(| (eq a b) (gt a b)),
+le = \a:Int.\b:Int.(| (eq a b) (lt a b)),

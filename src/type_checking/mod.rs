@@ -1,69 +1,42 @@
-use core::fmt::Display;
-use std::collections::HashMap;
-
 use crate::{
-    ast::{Program, TypeName, VariableName},
-    type_checking::{constraint_solving::solve_constraints, type_inference::generate_constraints},
+    ast::{Program, TypeDeclaration, TypeName, VariableDeclaration, VariableName},
+    type_checking::{
+        check::Check,
+        unification::{
+            PartialStructField, PartialType, PartialUnionMember, TypeId, TypeVarId,
+            UnificationContext,
+        },
+    },
     util::LinkedList,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
+use core::fmt::Display;
+use std::{collections::HashMap, hash::Hash};
 use thiserror::Error;
 
-mod constraint_solving;
-mod type_inference;
+mod check;
+mod infer;
+mod unification;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeVar(usize);
+#[derive(Debug, Error)]
+pub enum DriverError {
+    #[error("type {var} is not fully inferred")]
+    UnresolvedType { var: TypeVarId },
 
-impl Display for TypeVar {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "_typevar_{}", self.0)
-    }
-}
+    #[error("unknown type {type_name}")]
+    UnknownType { type_name: TypeName },
 
-#[derive(Debug, Clone)]
-pub enum TypeUnderConstruction {
-    Struct(TypeNameOrPlaceholder, Vec<StructField>),
-    Union(TypeNameOrPlaceholder, Vec<UnionMember>),
-    Tuple(Vec<TypeUnderConstruction>),
-    Function(Box<LinkedList<TypeUnderConstruction>>),
-    RecurseMarker(TypeName),
-    Var(TypeVar),
-}
+    #[error("unknown variable {variable_name}")]
+    UnknownVariable { variable_name: VariableName },
 
-impl Display for TypeUnderConstruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypeUnderConstruction::Struct(symbol_or_placeholder, _) => {
-                write!(f, "{}{{}}", symbol_or_placeholder)
-            }
-            TypeUnderConstruction::Union(symbol_or_placeholder, _) => {
-                write!(f, "{}[]", symbol_or_placeholder)
-            }
-            TypeUnderConstruction::Tuple(elms) => {
-                write!(
-                    f,
-                    "({})",
-                    elms.iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            }
-            TypeUnderConstruction::Function(args) => {
-                write!(
-                    f,
-                    "({})",
-                    args.iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" -> "),
-                )
-            }
-            TypeUnderConstruction::RecurseMarker(type_symbol) => write!(f, "{}<-", type_symbol),
-            TypeUnderConstruction::Var(var) => write!(f, "_{}", var),
-        }
-    }
+    #[error("duplicate field in struct {field_name}")]
+    DuplicateStructField { field_name: VariableName },
+
+    #[error("duplicate field in union {member_name}")]
+    DuplicateUnionMember { member_name: VariableName },
+
+    #[error("internal compiler error: {0}")]
+    Internal(&'static str),
 }
 
 #[derive(Debug, Clone)]
@@ -72,17 +45,112 @@ pub enum Type {
     Union(TypeName, Vec<UnionMember>),
     Tuple(Vec<Type>),
     Function(Box<LinkedList<Type>>),
-    RecurseMarker(TypeName),
+    RecursiveMarker(TypeName),
+}
+
+impl Type {
+    fn try_from_partial_type(
+        ctx: &UnificationContext,
+        id_to_type_name: &HashMap<TypeId, TypeName>,
+        partial_type: PartialType,
+    ) -> Result<Type> {
+        match partial_type {
+            PartialType::Var(var) => {
+                let typ = ctx.find(var)?;
+                match typ {
+                    PartialType::Union(id, _) | PartialType::Struct(id, _) => {
+                        let name =
+                            id_to_type_name
+                                .get(&id)
+                                .cloned()
+                                .ok_or(DriverError::Internal(
+                                    "struct type variable missing nominal name",
+                                ))?;
+                        Ok(Type::RecursiveMarker(name.clone()))
+                    }
+                    _ => Err(DriverError::UnresolvedType { var }.into()),
+                }
+            }
+
+            PartialType::Struct(id, fields) => {
+                let name = id_to_type_name
+                    .get(&id)
+                    .cloned()
+                    .ok_or(DriverError::Internal(
+                        "struct type variable missing nominal name",
+                    ))?;
+
+                let fields = fields
+                    .into_iter()
+                    .map(|PartialStructField { name, field_type }| {
+                        Ok(StructField {
+                            name,
+                            field_type: Self::try_from_partial_type(
+                                ctx,
+                                id_to_type_name,
+                                field_type,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(Type::Struct(name, fields))
+            }
+
+            PartialType::Union(id, members) => {
+                let name = id_to_type_name
+                    .get(&id)
+                    .cloned()
+                    .ok_or(DriverError::Internal(
+                        "union type variable missing nominal name",
+                    ))?;
+
+                let members = members
+                    .into_iter()
+                    .map(|m| match m {
+                        PartialUnionMember::SingletonUnionMember(n) => {
+                            Ok(UnionMember::SingletonUnionMember(n))
+                        }
+                        PartialUnionMember::UnionMember(n, t) => Ok(UnionMember::UnionMember(
+                            n,
+                            Self::try_from_partial_type(ctx, id_to_type_name, t)?,
+                        )),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(Type::Union(name, members))
+            }
+
+            PartialType::Tuple(elements) => Ok(Type::Tuple(
+                elements
+                    .into_iter()
+                    .map(|e| Self::try_from_partial_type(ctx, id_to_type_name, e))
+                    .collect::<Result<_>>()?,
+            )),
+
+            PartialType::Function(args) => {
+                let args = args
+                    .iter()
+                    .map(|a| Self::try_from_partial_type(ctx, id_to_type_name, a.clone()))
+                    .collect::<Result<Vec<_>>>()?;
+
+                Ok(Type::Function(Box::new(
+                    LinkedList::try_from(args)
+                        .map_err(|_| DriverError::Internal("empty function type"))?,
+                )))
+            }
+        }
+    }
 }
 
 impl Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Struct(symbol_or_placeholder, _) => {
-                write!(f, "{}{{}}", symbol_or_placeholder)
+            Self::Struct(type_name, _) => {
+                write!(f, "{}{{}}", type_name)
             }
-            Self::Union(symbol_or_placeholder, _) => {
-                write!(f, "{}[]", symbol_or_placeholder)
+            Self::Union(type_name, _) => {
+                write!(f, "{}[]", type_name)
             }
             Self::Tuple(elms) => {
                 write!(
@@ -104,7 +172,7 @@ impl Display for Type {
                         .join(" -> "),
                 )
             }
-            Self::RecurseMarker(type_symbol) => write!(f, "{}<-", type_symbol),
+            Type::RecursiveMarker(type_name) => write!(f, "<-{}", type_name),
         }
     }
 }
@@ -112,44 +180,12 @@ impl Display for Type {
 #[derive(Debug, Clone)]
 pub struct StructField {
     pub name: VariableName,
-    pub field_type: TypeUnderConstruction,
+    pub field_type: Type,
 }
 #[derive(Debug, Clone)]
 pub enum UnionMember {
     SingletonUnionMember(VariableName),
-    UnionMember(VariableName, TypeUnderConstruction),
-}
-
-#[derive(Debug, Clone)]
-pub enum TypeNameOrPlaceholder {
-    Symbol(TypeName),
-    Placeholder,
-}
-
-impl Display for TypeNameOrPlaceholder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypeNameOrPlaceholder::Symbol(type_symbol) => write!(f, "{}", type_symbol.as_str()),
-            TypeNameOrPlaceholder::Placeholder => write!(f, "_"),
-        }
-    }
-}
-
-impl PartialEq for TypeNameOrPlaceholder {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Symbol(a), Self::Symbol(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for TypeNameOrPlaceholder {}
-
-impl From<TypeName> for TypeNameOrPlaceholder {
-    fn from(value: TypeName) -> Self {
-        TypeNameOrPlaceholder::Symbol(value)
-    }
+    UnionMember(VariableName, Type),
 }
 
 impl UnionMember {
@@ -159,130 +195,49 @@ impl UnionMember {
             UnionMember::UnionMember(symbol, _) => symbol,
         }
     }
-    pub fn member_type(&self) -> Option<&TypeUnderConstruction> {
+    pub fn member_type(&self) -> Option<&Type> {
         match self {
             UnionMember::SingletonUnionMember(_) => None,
-            UnionMember::UnionMember(_, type_) => Some(type_),
+            UnionMember::UnionMember(_, typ) => Some(typ),
         }
-    }
-
-    pub fn member_type_owned(self) -> Option<TypeUnderConstruction> {
-        match self {
-            UnionMember::SingletonUnionMember(_) => None,
-            UnionMember::UnionMember(_, type_) => Some(type_),
-        }
-    }
-}
-
-impl PartialEq for TypeUnderConstruction {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Struct(l0, _), Self::Struct(r0, _)) => l0 == r0,
-            (Self::Union(l0, _), Self::Union(r0, _)) => l0 == r0,
-            (Self::Tuple(l0), Self::Tuple(r0)) => l0 == r0,
-            (Self::Function(l0), Self::Function(r0)) => {
-                l0.len() == r0.len() && l0.iter().zip(r0.iter()).all(|(a, b)| a == b)
-            }
-            (Self::RecurseMarker(l0), Self::RecurseMarker(r0)) => l0 == r0,
-            (Self::Var(l0), Self::Var(r0)) => l0 == r0,
-            (Self::RecurseMarker(l0), Self::Struct(TypeNameOrPlaceholder::Symbol(r0), _))
-            | (Self::Struct(TypeNameOrPlaceholder::Symbol(l0), _), Self::RecurseMarker(r0)) => {
-                l0 == r0
-            }
-            (Self::RecurseMarker(l0), Self::Union(TypeNameOrPlaceholder::Symbol(r0), _))
-            | (Self::Union(TypeNameOrPlaceholder::Symbol(l0), _), Self::RecurseMarker(r0)) => {
-                l0 == r0
-            }
-            _ => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Constraint {
-    Equal(TypeUnderConstruction, TypeUnderConstruction),
-    Subtype(TypeUnderConstruction, TypeUnderConstruction),
-}
-
-pub struct ConstraintContext {
-    next_var: usize,
-    constraints: Vec<Constraint>,
-}
-
-impl ConstraintContext {
-    fn new() -> Self {
-        Self {
-            next_var: 0,
-            constraints: Vec::new(),
-        }
-    }
-
-    fn fresh_var(&mut self) -> TypeVar {
-        let var = TypeVar(self.next_var);
-        self.next_var += 1;
-        var
-    }
-
-    fn print_constraints(constraints: &[Constraint]) {
-        for constraint in constraints {
-            Self::print_constraint(constraint);
-        }
-    }
-
-    fn print_constraint(constraint: &Constraint) {
-        let constraint = match constraint {
-            Constraint::Equal(a, b) => {
-                format!("{} == {}", a, b)
-            }
-            Constraint::Subtype(a, b) => {
-                format!("{} <= {}", a, b)
-            }
-        };
-        println!("{}", constraint);
-    }
-
-    fn add_constraint(&mut self, constraint: Constraint) -> Result<()> {
-        match constraint {
-            Constraint::Equal(a, b) if is_pure_type(&a) && is_pure_type(&b) => {
-                if a == b {
-                    Ok(())
-                } else {
-                    bail!("Types differ: {} and {}", a, b)
-                }
-            }
-            Constraint::Subtype(a, b) if is_pure_type(&a) && is_pure_type(&b) => {
-                if a == b {
-                    Ok(())
-                } else {
-                    bail!("{} is not a subtype of {}'", a, b)
-                }
-            }
-            _ => {
-                self.constraints.push(constraint);
-                Ok(())
-            }
-        }
-    }
-}
-
-fn is_pure_type(ty: &TypeUnderConstruction) -> bool {
-    match ty {
-        TypeUnderConstruction::Var(_) => false,
-        TypeUnderConstruction::Struct(_, _)
-        | TypeUnderConstruction::Union(_, _)
-        | TypeUnderConstruction::RecurseMarker(_) => true,
-        TypeUnderConstruction::Tuple(elements) => elements.iter().all(is_pure_type),
-        TypeUnderConstruction::Function(args) => args.iter().all(is_pure_type),
     }
 }
 
 #[derive(Debug, Clone, Error)]
-enum TypeError {
+pub enum TypeError {
     #[error("Cannot find type in scope")]
     UnableToFindType,
 }
+pub type TypeEnv<'a> = LinkedList<&'a HashMap<TypeMapSymbol, TypeVarId>>;
 
-pub type TypeMap = HashMap<TypeMapSymbol, Type>;
+impl<'a> TypeEnv<'a> {
+    fn lookup(
+        &self,
+        ctx: &UnificationContext,
+        symbol: &TypeMapSymbol,
+    ) -> Result<Option<PartialType>> {
+        self.iter()
+            .find_map(|f| f.get(symbol))
+            .map(|s| ctx.find(*s))
+            .transpose()
+    }
+
+    fn lookup_type(&self, ctx: &UnificationContext, type_name: TypeName) -> Result<PartialType> {
+        let key = type_name.clone().into();
+        self.lookup(ctx, &key)?
+            .ok_or(DriverError::UnknownType { type_name }.into())
+    }
+
+    fn lookup_variable(
+        &self,
+        ctx: &UnificationContext,
+        variable_name: VariableName,
+    ) -> Result<PartialType> {
+        let key = variable_name.clone().into();
+        self.lookup(ctx, &key)?
+            .ok_or(DriverError::UnknownVariable { variable_name }.into())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeMapSymbol {
@@ -311,75 +266,64 @@ impl From<TypeName> for TypeMapSymbol {
     }
 }
 
-pub fn type_check(program: &Program) -> Result<TypeMap> {
-    let (type_map, constraints) = generate_constraints(program)?;
-    let substutions = solve_constraints(constraints)?;
-    apply_substitutions(type_map, substutions)
-}
+pub fn type_check(program: &Program) -> Result<HashMap<TypeMapSymbol, Type>> {
+    let mut ctx = UnificationContext::new();
+    let mut stack_frame: HashMap<TypeMapSymbol, _> = HashMap::new();
 
-fn apply_substitutions(
-    type_map: HashMap<TypeMapSymbol, TypeUnderConstruction>,
-    substitutions: HashMap<TypeVar, TypeUnderConstruction>,
-) -> Result<TypeMap> {
-    type_map
-        .into_iter()
-        .try_fold(TypeMap::new(), |mut map, item| {
-            let (symbol, ty) = item;
-            let new = apply_substitution(ty, &substitutions)?;
-            map.insert(symbol, new);
-            Ok(map)
-        })
-}
+    let mut type_definitions = Vec::new();
+    let mut variable_definitions = Vec::new();
 
-fn apply_substitution(
-    ty: TypeUnderConstruction,
-    substitutions: &HashMap<TypeVar, TypeUnderConstruction>,
-) -> Result<Type> {
-    match ty {
-        TypeUnderConstruction::Struct(symbol_or_placeholder, struct_fields) => {
-            match symbol_or_placeholder {
-                TypeNameOrPlaceholder::Symbol(type_symbol) => {
-                    Ok(Type::Struct(type_symbol, struct_fields))
-                }
-                TypeNameOrPlaceholder::Placeholder => {
-                    panic!("We should never encounter placeholders. This is a bug!")
-                }
+    // Collect all type variables
+    for statement in &program.definitions {
+        match statement {
+            crate::ast::Declaration::IncludeDeclaration(_) => todo!(),
+            crate::ast::Declaration::TypeDeclaration(type_definition) => {
+                stack_frame.insert(type_definition.type_name.clone().into(), ctx.new_type_var());
+                type_definitions.push(type_definition);
             }
-        }
-        TypeUnderConstruction::Union(symbol_or_placeholder, union_members) => {
-            match symbol_or_placeholder {
-                TypeNameOrPlaceholder::Symbol(type_symbol) => {
-                    Ok(Type::Union(type_symbol, union_members))
-                }
-                TypeNameOrPlaceholder::Placeholder => {
-                    panic!("We should never encounter placeholders. This is a bug!")
-                }
+            crate::ast::Declaration::VariableDeclaration(variable_definition) => {
+                stack_frame.insert(
+                    variable_definition.variable_name.clone().into(),
+                    ctx.new_type_var(),
+                );
+                variable_definitions.push(variable_definition);
             }
-        }
-        TypeUnderConstruction::Tuple(elements) => {
-            let elements = elements
-                .into_iter()
-                .map(|elm| apply_substitution(elm, substitutions))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(Type::Tuple(elements))
-        }
-        TypeUnderConstruction::Function(args) => {
-            let args = args
-                .into_iter()
-                .map(|elm| apply_substitution(elm.clone(), substitutions))
-                .collect::<Result<Vec<_>, _>>()?;
-
-            Ok(Type::Function(Box::new(args.try_into().expect(
-                "Args cannot be empty, as we just converted it from a linked list.",
-            ))))
-        }
-        TypeUnderConstruction::RecurseMarker(symbol) => Ok(Type::RecurseMarker(symbol)),
-        TypeUnderConstruction::Var(type_var) => {
-            let ty = substitutions
-                .get(&type_var)
-                .ok_or(TypeError::UnableToFindType)?;
-            apply_substitution(ty.clone(), substitutions)
-                .with_context(|| format!("while resolving type variable {:?}={:?}", type_var, ty))
         }
     }
+
+    let env = LinkedList::singleton(&stack_frame);
+
+    let mut id_to_type_name = HashMap::new();
+    for TypeDeclaration {
+        type_name,
+        type_definition,
+    } in type_definitions
+    {
+        let expected = env.lookup_type(&ctx, type_name.clone())?;
+        type_definition.check(&env, &mut ctx, expected)?;
+        let typ = env.lookup_type(&ctx, type_name.clone())?;
+        match typ {
+            PartialType::Union(id, _) | PartialType::Struct(id, _) => {
+                id_to_type_name.insert(id, type_name.clone());
+            }
+            _ => (),
+        }
+    }
+
+    for VariableDeclaration {
+        variable_name,
+        variable_definition,
+    } in variable_definitions
+    {
+        let expected = env.lookup_variable(&ctx, variable_name.clone())?;
+        variable_definition.check(&env, &mut ctx, expected)?;
+    }
+
+    let mut out = HashMap::new();
+    for (symbol, var) in *env.peek().0 {
+        let typ = ctx.find(*var)?;
+        let typ = Type::try_from_partial_type(&ctx, &id_to_type_name, typ)?;
+        out.insert(symbol.clone(), typ);
+    }
+    Ok(out)
 }
