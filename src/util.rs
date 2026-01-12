@@ -1,3 +1,5 @@
+use nonempty::NonEmpty;
+
 #[derive(Clone, Debug)]
 pub struct LinkedList<T> {
     head: T,
@@ -26,6 +28,15 @@ impl<T> LinkedList<T> {
         Self::new(head, self)
     }
 
+    pub fn push_back(self, last: Self) -> Self {
+        let (head, tail) = self.pop();
+        let tail = match tail {
+            Some(tail) => tail.push_back(last),
+            None => last,
+        };
+        Self::new(head, tail)
+    }
+
     pub fn pop(self) -> (T, Option<Box<Self>>) {
         let Self {
             head,
@@ -42,6 +53,15 @@ impl<T> LinkedList<T> {
             length: _,
         } = self;
         (head, next.as_deref())
+    }
+
+    pub fn peek_mut(&mut self) -> (&mut T, Option<&mut Self>) {
+        let Self {
+            head,
+            next,
+            length: _,
+        } = self;
+        (head, next.as_deref_mut())
     }
 
     pub fn cons(head: T, next: Box<LinkedList<T>>) -> Box<LinkedList<T>> {
@@ -66,6 +86,12 @@ impl<T> LinkedList<T> {
         }
     }
 
+    pub fn iter_mut<'a>(&'a mut self) -> LinkedListIterMut<'a, T> {
+        LinkedListIterMut {
+            current: Some(self),
+        }
+    }
+
     pub fn from_iter<I>(iter: I) -> Option<Self>
     where
         I: IntoIterator<Item = T>,
@@ -77,6 +103,57 @@ impl<T> LinkedList<T> {
             out = LinkedList::new(x, out);
         }
         Some(out)
+    }
+}
+
+impl<T> From<NonEmpty<T>> for LinkedList<T> {
+    fn from(value: NonEmpty<T>) -> Self {
+        let NonEmpty { head, tail } = value;
+        let tail = tail.try_into();
+        match tail {
+            Ok(tail) => LinkedList::new(head, tail),
+            Err(_) => LinkedList::singleton(head),
+        }
+    }
+}
+
+impl<T> From<NonEmpty<T>> for Box<LinkedList<T>> {
+    fn from(value: NonEmpty<T>) -> Self {
+        let NonEmpty { head, tail } = value;
+        let tail = tail.try_into();
+        match tail {
+            Ok(tail) => Box::new(LinkedList::new(head, tail)),
+            Err(_) => Box::new(LinkedList::singleton(head)),
+        }
+    }
+}
+
+impl<T> LinkedList<&T> {
+    pub fn unpeek<'a, 'b>(head: &'a T, tail: &'b LinkedList<&T>) -> LinkedList<&'a T>
+    where
+        'b: 'a,
+    {
+        LinkedList::new(head, tail.into())
+    }
+}
+
+impl<'a, T> From<&'a LinkedList<T>> for LinkedList<&'a T> {
+    fn from(value: &'a LinkedList<T>) -> Self {
+        let (head, tail) = value.peek();
+        match tail {
+            None => LinkedList::singleton(head),
+            Some(tail) => LinkedList::new(head, tail.into()),
+        }
+    }
+}
+
+impl<'a, T> From<&'a LinkedList<&T>> for LinkedList<&'a T> {
+    fn from(value: &'a LinkedList<&T>) -> Self {
+        let (head, tail) = value.peek();
+        match tail {
+            None => LinkedList::singleton(head),
+            Some(tail) => LinkedList::new(head, tail.into()),
+        }
     }
 }
 
@@ -139,5 +216,30 @@ impl<'a, T> IntoIterator for &'a LinkedList<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
+    }
+}
+
+pub struct LinkedListIterMut<'a, T> {
+    current: Option<&'a mut LinkedList<T>>,
+}
+
+impl<'a, T> Iterator for LinkedListIterMut<'a, T> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.current.take()?;
+        let (out, next) = current.peek_mut();
+        self.current = next;
+        Some(out)
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut LinkedList<T> {
+    type Item = &'a mut T;
+
+    type IntoIter = LinkedListIterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }

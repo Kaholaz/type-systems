@@ -269,3 +269,15 @@ pub enum UnionValue {
     // <vname>
     VariableName(VariableName),
 }
+
+impl UnionValue {
+    pub fn name(&self) -> &VariableName {
+        match self {
+            UnionValue::VariableDeclaration(VariableDeclaration {
+                variable_name,
+                variable_definition: _,
+            }) => variable_name,
+            UnionValue::VariableName(variable_name) => variable_name,
+        }
+    }
+}
