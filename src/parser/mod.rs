@@ -13,7 +13,7 @@ use crate::{
 };
 use anyhow::Result;
 
-static RESERVED_CHARACTERS: [char; 11] = ['{', '}', '[', ']', '(', ')', ',', '.', '|', ':', '='];
+static RESERVED_CHARACTERS: [char; 10] = ['{', '}', '[', ']', '(', ')', ',', '.', ':', '='];
 static TERMINATING_CHARACTERS: [char; 5] = ['}', ']', ')', ',', '|'];
 
 pub fn parse(source: String) -> Result<Program> {
