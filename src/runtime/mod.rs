@@ -1,8 +1,8 @@
 use std::{
-    borrow::Cow,
     cell::OnceCell,
     collections::HashMap,
     fmt::{Debug, Display},
+    rc::Rc,
 };
 
 use nonempty::NonEmpty;
@@ -15,7 +15,7 @@ use crate::{
     util::LinkedList,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum RuntimeValue {
     UnionValue {
         union_name: TypeName,
@@ -25,7 +25,7 @@ pub enum RuntimeValue {
         struct_name: TypeName,
         struct_fields: Vec<StructField>,
     },
-    Tuple(Vec<RuntimeValue>),
+    Tuple(Vec<Rc<RuntimeValue>>),
     Function {
         bind_variable: VariableName,
         expression: ExpressionValue,
@@ -119,27 +119,27 @@ impl Display for RuntimeValue {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum UnionValue {
     SingularUnionValue {
         member_name: VariableName,
     },
     UnionValue {
         member_name: VariableName,
-        value: Box<RuntimeValue>,
+        value: Rc<RuntimeValue>,
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StructField {
     field_name: VariableName,
-    value: Box<RuntimeValue>,
+    value: Rc<RuntimeValue>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LazyRuntimeValue {
     lazy_value: Option<Expression>,
-    value: OnceCell<RuntimeValue>,
+    value: OnceCell<Rc<RuntimeValue>>,
 }
 
 impl LazyRuntimeValue {
@@ -148,15 +148,6 @@ impl LazyRuntimeValue {
             lazy_value: Some(expression.clone()),
             value: OnceCell::new(),
         }
-    }
-
-    fn immediate_expr(expression: &Expression, stack: &Stack) -> Self {
-        let out = Self {
-            lazy_value: None,
-            value: OnceCell::new(),
-        };
-        let _ = out.value.set(expression.evaluate(stack));
-        out
     }
 
     fn immediate_expr_value(expression_value: &ExpressionValue, stack: &Stack) -> Self {
@@ -168,7 +159,7 @@ impl LazyRuntimeValue {
         out
     }
 
-    fn immediate_runtime_value(runtime_value: RuntimeValue) -> Self {
+    fn immediate_runtime_value(runtime_value: Rc<RuntimeValue>) -> Self {
         let out = Self {
             lazy_value: None,
             value: OnceCell::new(),
@@ -177,28 +168,22 @@ impl LazyRuntimeValue {
         out
     }
 
-    fn get_runtime_value(&self, stack: &Stack) -> &RuntimeValue {
-        self.value.get_or_init(|| {
-            self.lazy_value
-                .as_ref()
-                .expect("Dereferenced illegaly constructed lazy runtime value!")
-                .evaluate(stack)
-        })
-    }
-
-    fn take(mut self, stack: &Stack) -> RuntimeValue {
-        self.value.take().unwrap_or_else(|| {
-            self.lazy_value
-                .expect("Illegaly constructed lazy runtime value!")
-                .evaluate(stack)
-        })
+    fn get_runtime_value(&self, stack: &Stack) -> Rc<RuntimeValue> {
+        self.value
+            .get_or_init(|| {
+                self.lazy_value
+                    .as_ref()
+                    .expect("Dereferenced illegaly constructed lazy runtime value!")
+                    .evaluate(stack)
+            })
+            .clone()
     }
 }
 
-type Frame = HashMap<VariableName, LazyRuntimeValue>;
+type Frame = HashMap<VariableName, Rc<LazyRuntimeValue>>;
 type Stack<'a> = LinkedList<&'a Frame>;
 
-fn lookup<'a>(stack: &'a Stack, variable: &VariableName) -> Cow<'a, RuntimeValue> {
+fn lookup(stack: &Stack, variable: &VariableName) -> Rc<RuntimeValue> {
     fn strip_stack<'a>(
         stack: &'a Stack,
         variable: &VariableName,
@@ -218,11 +203,11 @@ fn lookup<'a>(stack: &'a Stack, variable: &VariableName) -> Cow<'a, RuntimeValue
     }
 
     if let Some(int) = get_int_literal(variable) {
-        return Cow::Owned(int);
+        return Rc::new(int);
     }
 
     let (value, stack) = strip_stack(stack, variable);
-    Cow::Borrowed(value.get_runtime_value(stack))
+    value.get_runtime_value(stack).clone()
 }
 
 fn get_int_literal(variable_name: &VariableName) -> Option<RuntimeValue> {
@@ -232,7 +217,7 @@ fn get_int_literal(variable_name: &VariableName) -> Option<RuntimeValue> {
                 union_name: TypeName::new("Int"),
                 union_value: UnionValue::UnionValue {
                     member_name: VariableName::new("pos"),
-                    value: Box::new(do_get_int_literal(int)),
+                    value: Rc::new(do_get_int_literal(int)),
                 },
             })
         } else {
@@ -240,7 +225,7 @@ fn get_int_literal(variable_name: &VariableName) -> Option<RuntimeValue> {
                 union_name: TypeName::new("Int"),
                 union_value: UnionValue::UnionValue {
                     member_name: VariableName::new("neg"),
-                    value: Box::new(do_get_int_literal(int)),
+                    value: Rc::new(do_get_int_literal(int)),
                 },
             })
         }
@@ -262,7 +247,7 @@ fn do_get_int_literal(int: isize) -> RuntimeValue {
             union_name: TypeName::new("PosInt"),
             union_value: UnionValue::UnionValue {
                 member_name: VariableName::new("pre"),
-                value: Box::new(do_get_int_literal(int - 1)),
+                value: Rc::new(do_get_int_literal(int - 1)),
             },
         }
     } else if int == -1 {
@@ -277,13 +262,13 @@ fn do_get_int_literal(int: isize) -> RuntimeValue {
             union_name: TypeName::new("NegInt"),
             union_value: UnionValue::UnionValue {
                 member_name: VariableName::new("pre"),
-                value: Box::new(do_get_int_literal(int + 1)),
+                value: Rc::new(do_get_int_literal(int + 1)),
             },
         }
     }
 }
 
-pub fn run_program(program: &Program) -> Vec<(VariableName, RuntimeValue)> {
+pub fn run_program(program: &Program) -> Vec<(VariableName, Rc<RuntimeValue>)> {
     let mut global = Frame::new();
 
     // first pass: collect everything
@@ -298,7 +283,7 @@ pub fn run_program(program: &Program) -> Vec<(VariableName, RuntimeValue)> {
                 } = variable_declaration;
                 global.insert(
                     variable_name.clone(),
-                    LazyRuntimeValue::lazy(variable_definition),
+                    Rc::new(LazyRuntimeValue::lazy(variable_definition)),
                 );
             }
         }
@@ -325,11 +310,11 @@ pub fn run_program(program: &Program) -> Vec<(VariableName, RuntimeValue)> {
 }
 
 trait Evaluate: Debug {
-    fn evaluate(&self, stack: &Stack) -> RuntimeValue;
+    fn evaluate(&self, stack: &Stack) -> Rc<RuntimeValue>;
 }
 
-fn call_function(function: &RuntimeValue, arg: LazyRuntimeValue) -> RuntimeValue {
-    match function {
+fn call_function(function: Rc<RuntimeValue>, arg: Rc<LazyRuntimeValue>) -> Rc<RuntimeValue> {
+    match &*function {
         RuntimeValue::Function {
             bind_variable,
             expression,
@@ -349,12 +334,15 @@ fn call_function(function: &RuntimeValue, arg: LazyRuntimeValue) -> RuntimeValue
 }
 
 impl Evaluate for Expression {
-    fn evaluate(&self, stack: &Stack) -> RuntimeValue {
+    fn evaluate(&self, stack: &Stack) -> Rc<RuntimeValue> {
         let (mut head, mut tail) = self.values.peek();
         let mut out = head.evaluate(stack);
         while let Some(args) = tail {
             (head, tail) = args.peek();
-            out = call_function(&out, LazyRuntimeValue::immediate_expr_value(head, stack))
+            out = call_function(
+                out,
+                Rc::new(LazyRuntimeValue::immediate_expr_value(head, stack)),
+            )
         }
         out
     }
@@ -374,18 +362,18 @@ fn capture_environment(stack: &Stack) -> Frame {
 }
 
 impl Evaluate for ExpressionValue {
-    fn evaluate(&self, stack: &Stack) -> RuntimeValue {
+    fn evaluate(&self, stack: &Stack) -> Rc<RuntimeValue> {
         match self {
             ExpressionValue::FunctionDeclaration(assignment, expression) => {
                 let StructFieldTypeDeclaration {
                     field_name: variable_name,
                     type_expression: _,
                 } = assignment;
-                RuntimeValue::Function {
+                Rc::new(RuntimeValue::Function {
                     bind_variable: variable_name.clone(),
                     expression: expression.as_ref().clone(),
                     captured_env: capture_environment(stack),
-                }
+                })
             }
             ExpressionValue::ValueExpression(value) => value.evaluate(stack),
             ExpressionValue::TypeExpression(type_name, spec) => match spec {
@@ -401,26 +389,23 @@ impl Evaluate for ExpressionValue {
 }
 
 impl Evaluate for Value {
-    fn evaluate(&self, stack: &Stack) -> RuntimeValue {
+    fn evaluate(&self, stack: &Stack) -> Rc<RuntimeValue> {
         match self {
-            Value::Variable(variable) => {
-                let value = lookup(stack, variable);
-                value.into_owned()
-            }
+            Value::Variable(variable) => lookup(stack, variable),
             Value::Expression(expression) => expression.evaluate(stack),
             Value::Tuple(elements) => {
                 let elements = elements
                     .iter()
                     .map(|e| e.evaluate(stack))
                     .collect::<Vec<_>>();
-                RuntimeValue::Tuple(elements)
+                Rc::new(RuntimeValue::Tuple(elements))
             }
-            Value::StructAccess(value, field_name) => match value.evaluate(stack) {
+            Value::StructAccess(value, field_name) => match &*value.evaluate(stack) {
                 RuntimeValue::Struct {
                     struct_name: _,
                     struct_fields: fields,
-                } => match fields.into_iter().find(|f| &f.field_name == field_name) {
-                    Some(field) => *field.value,
+                } => match fields.iter().find(|f| &f.field_name == field_name) {
+                    Some(field) => field.value.clone(),
                     None => panic!(
                         "Tried to access a field that does not exist. This indicates an error in the type checker."
                     ),
@@ -441,9 +426,9 @@ fn evaluate_case(
     value: &Value,
     explicit_cases: &NonEmpty<VariableDeclaration>,
     default_case: Option<&Expression>,
-) -> RuntimeValue {
+) -> Rc<RuntimeValue> {
     let value = value.evaluate(stack);
-    match value {
+    match &*value {
         RuntimeValue::UnionValue {
             union_name: _,
             union_value: UnionValue::SingularUnionValue { member_name },
@@ -451,7 +436,7 @@ fn evaluate_case(
             let expression = explicit_cases
                 .iter()
                 .find_map(|f| {
-                    if f.variable_name == member_name {
+                    if &f.variable_name == member_name {
                         Some(&f.variable_definition)
                     } else {
                         None
@@ -476,7 +461,7 @@ fn evaluate_case(
                      variable_name,
                      variable_definition,
                  }| {
-                    if variable_name == &member_name {
+                    if variable_name == member_name {
                         Some(variable_definition)
                     } else {
                         None
@@ -485,7 +470,7 @@ fn evaluate_case(
             );
             match explicit_case {
                 Some(function) => {
-                    call_function(&function.evaluate(stack), LazyRuntimeValue::immediate_runtime_value(*member_value))
+                    call_function(function.evaluate(stack), Rc::new(LazyRuntimeValue::immediate_runtime_value(member_value.clone())))
                 }
                 None => default_case.expect(
                     "No case found for union value. This indicates an error in the type checker.",
@@ -502,24 +487,24 @@ fn evaluate_union_value(
     union_name: TypeName,
     union_value: &ast::UnionValue,
     stack: &Stack,
-) -> RuntimeValue {
+) -> Rc<RuntimeValue> {
     match union_value {
         ast::UnionValue::VariableDeclaration(variable_declaration) => {
             let value = variable_declaration.variable_definition.evaluate(stack);
-            RuntimeValue::UnionValue {
+            Rc::new(RuntimeValue::UnionValue {
                 union_name,
                 union_value: UnionValue::UnionValue {
                     member_name: variable_declaration.variable_name.clone(),
-                    value: Box::new(value),
+                    value,
                 },
-            }
+            })
         }
-        ast::UnionValue::VariableName(variable_name) => RuntimeValue::UnionValue {
+        ast::UnionValue::VariableName(variable_name) => Rc::new(RuntimeValue::UnionValue {
             union_name,
             union_value: UnionValue::SingularUnionValue {
                 member_name: variable_name.clone(),
             },
-        },
+        }),
     }
 }
 
@@ -527,19 +512,19 @@ fn evaluate_fields(
     struct_name: TypeName,
     struct_fieds: &[VariableDeclaration],
     stack: &Stack,
-) -> RuntimeValue {
+) -> Rc<RuntimeValue> {
     let struct_fields = struct_fieds
         .iter()
         .map(|f| {
             let value = f.variable_definition.evaluate(stack);
             StructField {
                 field_name: f.variable_name.clone(),
-                value: Box::new(value),
+                value,
             }
         })
         .collect::<Vec<_>>();
-    RuntimeValue::Struct {
+    Rc::new(RuntimeValue::Struct {
         struct_name,
         struct_fields,
-    }
+    })
 }
