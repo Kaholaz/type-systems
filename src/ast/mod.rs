@@ -45,14 +45,14 @@ pub struct Program {
 /// <def> ::= ’@’ <file_name> | <tdef> | <vdef>
 #[derive(Debug, Clone)]
 pub enum Declaration {
-    IncludeDeclaration(FileName),
+    IncludeDeclaration(FileName, Box<Program>),
     TypeDeclaration(TypeDeclaration),
     VariableDeclaration(VariableDeclaration),
 }
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
 /// ’@’ <file_name>
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileName(String);
 impl FileName {
     pub fn new(s: impl Into<String>) -> Self {
@@ -61,6 +61,12 @@ impl FileName {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl Display for FileName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "@{}", self.0)
     }
 }
 

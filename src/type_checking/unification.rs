@@ -1,4 +1,8 @@
-use crate::{ast::VariableName, util::LinkedList};
+use crate::{
+    ast::{TypeName, VariableName},
+    type_checking::{StructField, Type, UnionMember},
+    util::LinkedList,
+};
 use anyhow::{Context, Result};
 use std::{collections::HashMap, fmt::Display};
 use thiserror::Error;
@@ -71,6 +75,118 @@ pub struct PartialStructField {
 pub enum PartialUnionMember {
     SingletonUnionMember(VariableName),
     UnionMember(VariableName, PartialType),
+}
+
+impl PartialType {
+    pub fn from_type(
+        ctx: &mut UnificationContext,
+        id_to_type_name: &mut HashMap<TypeId, TypeName>,
+        typ: &Type,
+    ) -> Self {
+        let mut id_to_type_name_inner = Vec::new();
+        let mut unification_goals = Vec::new();
+        let typ =
+            Self::from_type_impl(ctx, &mut id_to_type_name_inner, &mut unification_goals, typ);
+
+        let typ = match &typ {
+            PartialType::Struct(id, _) | PartialType::Union(id, _) => {
+                let name = id_to_type_name_inner
+                    .iter()
+                    .find_map(|(id_inner, type_name)| {
+                        if id_inner == id {
+                            Some(type_name)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap();
+
+                let recurse_vars = unification_goals.iter().filter_map(|(var, name_inner)| {
+                    if name == name_inner { Some(var) } else { None }
+                });
+
+                recurse_vars.for_each(|var| {
+                    ctx.unify_partial(typ.clone(), PartialType::Var(*var))
+                        .unwrap()
+                });
+                typ
+            }
+            _ => typ,
+        };
+
+        for (id, name) in id_to_type_name_inner {
+            id_to_type_name.insert(id, name);
+        }
+        typ
+    }
+
+    fn from_type_impl(
+        ctx: &mut UnificationContext,
+        id_to_type_name: &mut Vec<(TypeId, TypeName)>,
+        unification_goals: &mut Vec<(TypeVarId, TypeName)>,
+        typ: &Type,
+    ) -> Self {
+        match typ {
+            Type::Struct(type_name, struct_fields) => {
+                let type_id = ctx.new_type_id();
+                id_to_type_name.push((type_id, type_name.clone()));
+                let fields = struct_fields
+                    .iter()
+                    .map(|StructField { name, field_type }| PartialStructField {
+                        name: name.clone(),
+                        field_type: PartialType::from_type_impl(
+                            ctx,
+                            id_to_type_name,
+                            unification_goals,
+                            field_type,
+                        ),
+                    })
+                    .collect();
+                PartialType::Struct(type_id, fields)
+            }
+            Type::Union(type_name, union_members) => {
+                let type_id = ctx.new_type_id();
+                id_to_type_name.push((type_id, type_name.clone()));
+                let members = union_members
+                    .iter()
+                    .map(|member| match member {
+                        UnionMember::SingletonUnionMember(name) => {
+                            PartialUnionMember::SingletonUnionMember(name.clone())
+                        }
+                        UnionMember::UnionMember(name, typ) => PartialUnionMember::UnionMember(
+                            name.clone(),
+                            PartialType::from_type_impl(
+                                ctx,
+                                id_to_type_name,
+                                unification_goals,
+                                typ,
+                            ),
+                        ),
+                    })
+                    .collect();
+                PartialType::Union(type_id, members)
+            }
+            Type::Tuple(elements) => PartialType::Tuple(
+                elements
+                    .iter()
+                    .map(|e| {
+                        PartialType::from_type_impl(ctx, id_to_type_name, unification_goals, e)
+                    })
+                    .collect(),
+            ),
+            Type::Function(args) => {
+                let args = args.map_to_owned(|arg| {
+                    PartialType::from_type_impl(ctx, id_to_type_name, unification_goals, arg)
+                });
+                PartialType::Function(Box::new(args))
+            }
+            Type::RecursiveMarker(type_name) => {
+                let var = ctx.new_type_var();
+                unification_goals.push((var, type_name.clone()));
+                PartialType::Var(var)
+            }
+        }
+    }
 }
 
 impl Display for PartialType {
@@ -302,7 +418,7 @@ impl UnificationContext {
             .find(expected)
             .with_context(|| format!("while resolving expected type variable {}", expected))?;
 
-        match (inferred_type.clone(), expected_type.clone()) {
+        match (inferred_type, expected_type) {
             (PartialType::Var(a), PartialType::Var(b)) if a == b => Ok(()),
 
             (inferred, PartialType::Var(expected_var)) => {
@@ -321,19 +437,21 @@ impl UnificationContext {
                 )
             }),
 
-            (inferred, expected) => self
-                .unify_partial(inferred.clone(), expected.clone())
-                .with_context(|| {
+            (inferred, expected) => {
+                let inferred_str = inferred.to_string();
+                let expected_str = expected.to_string();
+                self.unify_partial(inferred, expected).with_context(|| {
                     format!(
                         "while unifying type variables {} and {}",
-                        inferred, expected
+                        inferred_str, expected_str
                     )
-                }),
+                })
+            }
         }
     }
 
     pub fn unify_partial(&mut self, inferred: PartialType, expected: PartialType) -> Result<()> {
-        match (inferred.clone(), expected.clone()) {
+        match (inferred, expected) {
             (PartialType::Var(a), PartialType::Var(b)) => self
                 .unify_vars(a, b)
                 .with_context(|| format!("while unifying type variables {} and {}", a, b)),
@@ -366,11 +484,13 @@ impl UnificationContext {
                     let (inferred_arg, inferred_args_inner) = inferred_args.pop();
                     inferred_args = inferred_args_inner.unwrap();
 
-                    self.unify_partial(inferred_arg.clone(), expected_arg.clone())
+                    let inferred_arg_str = inferred_arg.to_string();
+                    let expected_arg_str = expected_arg.to_string();
+                    self.unify_partial(inferred_arg, expected_arg)
                         .with_context(|| {
                             format!(
                                 "while unifying function argument at position {}:\n  expected: {}\n  actual:   {}",
-                                arg_position, expected_arg, inferred_arg
+                                arg_position, expected_arg_str, inferred_arg_str
                             )
                         })?;
                     arg_position += 1;
@@ -383,11 +503,13 @@ impl UnificationContext {
                     PartialType::Function(inferred_args)
                 };
 
-                self.unify_partial(inferred_return.clone(), expected_return.clone())
+                let expected_return_string = expected_return.to_string();
+                let inferred_return_string = inferred_return.to_string();
+                self.unify_partial(inferred_return, expected_return)
                     .with_context(|| {
                         format!(
                             "while unifying function return type:\n  expected: {}\n  actual:   {}",
-                            expected_return, inferred_return
+                            expected_return_string, inferred_return_string
                         )
                     })
                     .with_context(|| {
@@ -463,11 +585,13 @@ impl UnificationContext {
                 }
 
                 for (i, (x, y)) in a.into_iter().zip(b.into_iter()).enumerate() {
-                    self.unify_partial(x.clone(), y.clone())
+                    let x_str = x.to_string();
+                    let y_str = y.to_string();
+                    self.unify_partial(x, y)
                         .with_context(|| {
                             format!(
                                 "while unifying tuple element at position {}:\n  expected: {}\n  actual:   {}",
-                                i, y, x
+                                i, y_str, x_str
                             )
                         })?;
                 }
@@ -487,6 +611,12 @@ impl UnificationContext {
                 )
             }),
         }
+    }
+}
+
+impl Default for UnificationContext {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

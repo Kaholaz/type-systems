@@ -1,8 +1,0 @@
-Inf = [inf: Inf, end],
-
-a = \a:Inf.(
-  fst a id
-),
-
-id = \id:Inf.id,
-fst = \fst:Inf.(\scd:Inf.fst),

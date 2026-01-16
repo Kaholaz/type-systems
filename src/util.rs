@@ -80,6 +80,82 @@ impl<T> LinkedList<T> {
         false
     }
 
+    pub fn map<F, A>(self, mut f: F) -> LinkedList<A>
+    where
+        F: FnMut(T) -> A,
+    {
+        let (head, tail) = self.pop();
+        let head = f(head);
+        match tail {
+            Some(tail) => {
+                let tail = (*tail).map(f);
+                LinkedList::new(head, tail)
+            }
+            None => LinkedList::singleton(head),
+        }
+    }
+
+    pub fn map_to_owned<F, A>(&self, mut f: F) -> LinkedList<A>
+    where
+        F: FnMut(&T) -> A,
+    {
+        let (head, tail) = self.peek();
+        let head = f(head);
+        match tail {
+            Some(tail) => {
+                let tail = tail.map_to_owned(f);
+                LinkedList::new(head, tail)
+            }
+            None => LinkedList::singleton(head),
+        }
+    }
+
+    pub fn fold<F, A>(self, acc: A, f: &mut F) -> A
+    where
+        F: FnMut(A, T) -> A,
+    {
+        let (head, tail) = self.pop();
+        let acc = f(acc, head);
+        match tail {
+            None => acc,
+            Some(tail) => tail.fold(acc, f),
+        }
+    }
+
+    pub fn fold_to_owned<F, A>(&self, acc: A, f: &mut F) -> A
+    where
+        F: FnMut(A, &T) -> A,
+    {
+        let (head, tail) = self.peek();
+        let acc = f(acc, head);
+        match tail {
+            None => acc,
+            Some(tail) => tail.fold_to_owned(acc, f),
+        }
+    }
+
+    pub fn foldr<F, A>(self, acc: A, f: &F) -> A
+    where
+        F: Fn(A, T) -> A,
+    {
+        let (head, tail) = self.pop();
+        match tail {
+            None => f(acc, head),
+            Some(tail) => f(tail.foldr(acc, f), head),
+        }
+    }
+
+    pub fn foldr_to_owned<F, A>(&self, acc: A, f: &F) -> A
+    where
+        F: Fn(A, &T) -> A,
+    {
+        let (head, tail) = self.peek();
+        match tail {
+            None => f(acc, head),
+            Some(tail) => f(tail.foldr_to_owned(acc, f), head),
+        }
+    }
+
     pub fn iter<'a>(&'a self) -> LinkedListIter<'a, T> {
         LinkedListIter {
             current: Some(self),
@@ -163,6 +239,12 @@ impl<'a, T: Clone + 'a> LinkedList<T> {
         I: IntoIterator<Item = &'a T>,
     {
         Self::from_iter(iter.into_iter().cloned())
+    }
+}
+
+impl<T> LinkedList<T> {
+    pub fn to_owned_refs(&self) -> LinkedList<&T> {
+        LinkedList::from_iter_ref(self.iter()).unwrap()
     }
 }
 

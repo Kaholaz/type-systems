@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Program, TypeDeclaration, TypeName, VariableDeclaration, VariableName},
+    ast::{FileName, Program, TypeDeclaration, TypeName, VariableDeclaration, VariableName},
     type_checking::{
         check::Check,
         unification::{
@@ -9,9 +9,10 @@ use crate::{
     },
     util::LinkedList,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use core::fmt::Display;
-use std::{collections::HashMap, hash::Hash};
+use indexmap::IndexMap;
+use std::{collections::HashMap, hash::Hash, rc::Rc};
 use thiserror::Error;
 
 mod check;
@@ -208,10 +209,10 @@ pub enum TypeError {
     #[error("Cannot find type in scope")]
     UnableToFindType,
 }
-pub type TypeFrame<'a> = HashMap<TypeMapSymbol, TypeVarId>;
-pub type TypeEnv<'a> = LinkedList<&'a HashMap<TypeMapSymbol, TypeVarId>>;
+pub type TypeFrame = IndexMap<TypeMapSymbol, TypeVarId>;
+pub type TypeEnv = LinkedList<Rc<TypeFrame>>;
 
-impl<'a> TypeEnv<'a> {
+impl TypeEnv {
     fn lookup(
         &self,
         ctx: &UnificationContext,
@@ -275,21 +276,47 @@ impl From<TypeName> for TypeMapSymbol {
     }
 }
 
-pub fn type_check(program: &Program) -> Result<HashMap<TypeMapSymbol, Type>> {
+pub fn type_check(program: &Program) -> Result<Vec<(TypeMapSymbol, Type)>> {
     let mut ctx = UnificationContext::new();
-    let mut stack_frame: HashMap<TypeMapSymbol, _> = HashMap::new();
-
-    let mut type_definitions = Vec::new();
-    let mut variable_definitions = Vec::new();
-
-    // Insert predefined types
     let mut id_to_type_name = HashMap::new();
-    insert_int_type(&mut ctx, &mut stack_frame, &mut id_to_type_name);
+    let (out, _) = type_check_impl(&mut ctx, &mut id_to_type_name, &mut Vec::new(), program)?.pop();
+    out.iter()
+        .map(|(name, var)| {
+            Ok((
+                name.clone(),
+                Type::try_from_partial_type(&ctx, &id_to_type_name, ctx.find(*var)?)?,
+            ))
+        })
+        .collect()
+}
+
+pub fn type_check_impl(
+    ctx: &mut UnificationContext,
+    id_to_type_name: &mut HashMap<TypeId, TypeName>,
+    already_imported: &mut Vec<FileName>,
+    program: &Program,
+) -> Result<TypeEnv> {
+    // Insert predefined types
+    let mut predefined_frame = TypeFrame::new();
+    insert_int_type(ctx, &mut predefined_frame, id_to_type_name);
+    let mut env = TypeEnv::singleton(Rc::new(predefined_frame));
 
     // Collect all type variables
+    let mut type_definitions = Vec::new();
+    let mut variable_definitions = Vec::new();
+    let mut stack_frame = TypeFrame::new();
     for statement in &program.definitions {
         match statement {
-            crate::ast::Declaration::IncludeDeclaration(_) => todo!(),
+            crate::ast::Declaration::IncludeDeclaration(file_name, included_program) => {
+                if already_imported.contains(file_name) {
+                    continue;
+                }
+                already_imported.push(file_name.clone());
+                let included_types =
+                    type_check_impl(ctx, id_to_type_name, already_imported, included_program)
+                        .context("while checking included program")?;
+                env = included_types.push_back(env);
+            }
             crate::ast::Declaration::TypeDeclaration(type_definition) => {
                 stack_frame.insert(type_definition.type_name.clone().into(), ctx.new_type_var());
                 type_definitions.push(type_definition);
@@ -304,16 +331,15 @@ pub fn type_check(program: &Program) -> Result<HashMap<TypeMapSymbol, Type>> {
         }
     }
 
-    let env = LinkedList::singleton(&stack_frame);
-
+    let env = TypeEnv::new(Rc::new(stack_frame), env);
     for TypeDeclaration {
         type_name,
         type_definition,
     } in type_definitions
     {
-        let expected = env.lookup_type(&ctx, type_name.clone())?;
-        type_definition.check(&env, &mut ctx, expected)?;
-        let typ = env.lookup_type(&ctx, type_name.clone())?;
+        let expected = env.lookup_type(ctx, type_name.clone())?;
+        type_definition.check(&env, ctx, expected)?;
+        let typ = env.lookup_type(ctx, type_name.clone())?;
         match typ {
             PartialType::Union(id, _) | PartialType::Struct(id, _) => {
                 id_to_type_name.insert(id, type_name.clone());
@@ -327,17 +353,11 @@ pub fn type_check(program: &Program) -> Result<HashMap<TypeMapSymbol, Type>> {
         variable_definition,
     } in variable_definitions
     {
-        let expected = env.lookup_variable(&ctx, variable_name.clone())?;
-        variable_definition.check(&env, &mut ctx, expected)?;
+        let expected = env.lookup_variable(ctx, variable_name.clone())?;
+        variable_definition.check(&env, ctx, expected)?;
     }
 
-    let mut out = HashMap::new();
-    for (symbol, var) in *env.peek().0 {
-        let typ = ctx.find(*var)?;
-        let typ = Type::try_from_partial_type(&ctx, &id_to_type_name, typ)?;
-        out.insert(symbol.clone(), typ);
-    }
-    Ok(out)
+    Ok(env)
 }
 
 fn insert_int_type(
