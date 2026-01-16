@@ -4,7 +4,7 @@ use crate::{
         TypeExpression, TypeValue, UnionValue, Value, VariableDeclaration, VariableName,
     },
     type_checking::{
-        PartialType, TypeEnv,
+        PartialType, TypeEnv, TypeFrame,
         check::Check,
         unification::{PartialStructField, PartialUnionMember, UnificationContext},
     },
@@ -12,7 +12,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use nonempty::NonEmpty;
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -532,9 +532,9 @@ impl Infer for ExpressionValue {
                         )
                     })?;
 
-                let mut stack_frame = HashMap::new();
+                let mut stack_frame = TypeFrame::new();
                 stack_frame.insert(field_name.clone().into(), arg_id);
-                let env = LinkedList::unpeek(&stack_frame, env);
+                let env = TypeEnv::new(Rc::new(stack_frame), env.clone());
 
                 let ret_id = ctx.new_type_var();
                 expression_value

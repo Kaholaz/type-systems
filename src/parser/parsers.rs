@@ -1,3 +1,5 @@
+use std::{fmt::format, fs::read_to_string};
+
 use crate::{
     ast::{
         Declaration, EnumElementTypeDeclaration, Expression, ExpressionValue, FileName,
@@ -64,9 +66,15 @@ impl Parsable for Declaration {
             scanner
                 .advance_and_skip_whitespace()
                 .context("failed to advance after '@'")?;
-            FileName::parse(scanner)
-                .map(Self::IncludeDeclaration)
-                .context("failed to parse include declaration filename")
+            let filename =
+                FileName::parse(scanner).context("failed to parse include declaration filename")?;
+            let include_source = read_to_string(filename.as_str())
+                .with_context(|| format!("while importing {}", filename.clone()))?;
+            let included_program = crate::parser::parse(include_source)?;
+            Ok(Declaration::IncludeDeclaration(
+                filename,
+                Box::new(included_program),
+            ))
         } else if c.is_uppercase() {
             TypeDeclaration::parse(scanner)
                 .map(Self::TypeDeclaration)
