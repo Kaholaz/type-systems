@@ -338,7 +338,11 @@ pub fn type_check_impl(
     } in type_definitions
     {
         let expected = env.lookup_type(ctx, type_name.clone())?;
-        type_definition.check(&env, ctx, expected)?;
+        // TODO: Handle the case where the type definition is not provided (PIFL)
+        type_definition
+            .as_ref()
+            .expect("this may not be present in PIFL")
+            .check(&env, ctx, expected)?;
         let typ = env.lookup_type(ctx, type_name.clone())?;
         match typ {
             PartialType::Union(id, _) | PartialType::Struct(id, _) => {
