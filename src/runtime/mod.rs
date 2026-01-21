@@ -9,8 +9,8 @@ use nonempty::NonEmpty;
 
 use crate::{
     ast::{
-        self, Declaration, Expression, ExpressionValue, FileName, Program,
-        StructFieldTypeDeclaration, TypeName, Value, VariableDeclaration, VariableName,
+        self, Declaration, Expression, ExpressionValue, FileName, FunctionArgument, Program,
+        TypeName, Value, VariableDeclaration, VariableName,
     },
     util::LinkedList,
 };
@@ -343,17 +343,18 @@ impl Evaluate for Expression {
 impl Evaluate for ExpressionValue {
     fn evaluate(&self, stack: &Stack) -> Rc<RuntimeValue> {
         match self {
-            ExpressionValue::FunctionDeclaration(assignment, expression) => {
-                let StructFieldTypeDeclaration {
-                    field_name: variable_name,
-                    type_expression: _,
-                } = assignment;
-                Rc::new(RuntimeValue::Function {
-                    bind_variable: variable_name.clone(),
-                    expression: expression.as_ref().clone(),
-                    captured_stack: stack.clone(),
-                })
-            }
+            ExpressionValue::FunctionDeclaration {
+                function_arg:
+                    FunctionArgument {
+                        argument_name,
+                        type_expression: _,
+                    },
+                function_body: expression,
+            } => Rc::new(RuntimeValue::Function {
+                bind_variable: argument_name.clone(),
+                expression: expression.as_ref().clone(),
+                captured_stack: stack.clone(),
+            }),
             ExpressionValue::ValueExpression(value) => value.evaluate(stack),
             ExpressionValue::TypeExpression(type_name, spec) => match spec {
                 crate::ast::Spec::UnionValue(union_value) => {

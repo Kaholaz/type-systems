@@ -1,7 +1,8 @@
 use crate::{
     ast::{
-        Expression, ExpressionValue, NominalType, StructFieldTypeDeclaration, TypeDefinition,
-        TypeExpression, TypeValue, UnionValue, Value, VariableDeclaration, VariableName,
+        Expression, ExpressionValue, FunctionArgument, NominalType, StructFieldTypeDeclaration,
+        TypeDefinition, TypeExpression, TypeValue, UnionValue, Value, VariableDeclaration,
+        VariableName,
     },
     type_checking::{
         PartialType, TypeEnv, TypeFrame,
@@ -383,7 +384,8 @@ impl Infer for TypeDefinition {
 impl Infer for NominalType {
     fn infer(&self, env: &TypeEnv, ctx: &mut UnificationContext) -> Result<PartialType> {
         match self {
-            NominalType::StructType(fields) => {
+            NominalType::StructType { fields, generics } => {
+                // TODO: DO SOMETHING WITH THE GENERICS
                 let mut field_map = HashMap::new();
                 for StructFieldTypeDeclaration {
                     field_name,
@@ -408,7 +410,8 @@ impl Infer for NominalType {
                     .collect();
                 Ok(PartialType::Struct(ctx.new_type_id(), fields))
             }
-            NominalType::EnumType(members) => {
+            NominalType::UnionType { members, generics } => {
+                // TODO: DO SOMETHING WITH THE GENERICS
                 let mut member_map = HashMap::new();
                 for member in members {
                     let member_type = member
@@ -473,7 +476,10 @@ impl Infer for TypeExpression {
 impl Infer for TypeValue {
     fn infer(&self, env: &TypeEnv, ctx: &mut UnificationContext) -> Result<PartialType> {
         match self {
-            TypeValue::TypeName(type_name) => env
+            TypeValue::TypeName {
+                type_name,
+                generics, // TODO: do something with the generics
+            } => env
                 .lookup_type(ctx, type_name.clone())
                 .with_context(|| format!("while looking up type `{}`", type_name)),
             TypeValue::TypeTuple(elements) => {
@@ -515,32 +521,41 @@ impl Infer for Expression {
 impl Infer for ExpressionValue {
     fn infer(&self, env: &TypeEnv, ctx: &mut UnificationContext) -> Result<PartialType> {
         match self {
-            ExpressionValue::FunctionDeclaration(
-                StructFieldTypeDeclaration {
-                    field_name,
-                    type_expression,
-                },
-                expression_value,
-            ) => {
+            ExpressionValue::FunctionDeclaration {
+                function_arg:
+                    FunctionArgument {
+                        argument_name,
+                        type_expression,
+                    },
+                function_body,
+            } => {
                 let arg_id = ctx.new_type_var();
+                // TODO: handle the case where type_expression is not present (PIFL):
+                let type_expression = type_expression
+                    .as_ref()
+                    .expect("this may not be present in PIFL");
+
                 type_expression
                     .check(env, ctx, PartialType::Var(arg_id))
                     .with_context(|| {
                         format!(
                             "while checking parameter type for function argument `{}`",
-                            field_name
+                            argument_name
                         )
                     })?;
 
                 let mut stack_frame = TypeFrame::new();
-                stack_frame.insert(field_name.clone().into(), arg_id);
+                stack_frame.insert(argument_name.clone().into(), arg_id);
                 let env = TypeEnv::new(Rc::new(stack_frame), env.clone());
 
                 let ret_id = ctx.new_type_var();
-                expression_value
+                function_body
                     .check(&env, ctx, PartialType::Var(ret_id))
                     .with_context(|| {
-                        format!("while checking function body (parameter: `{}`)", field_name)
+                        format!(
+                            "while checking function body (parameter: `{}`)",
+                            argument_name
+                        )
                     })?;
 
                 Ok(PartialType::Function(Box::new(LinkedList::new(

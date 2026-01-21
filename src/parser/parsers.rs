@@ -1,10 +1,11 @@
-use std::{fmt::format, fs::read_to_string};
+use std::fs::read_to_string;
 
 use crate::{
     ast::{
         Declaration, EnumElementTypeDeclaration, Expression, ExpressionValue, FileName,
-        NominalType, Program, Spec, StructFieldTypeDeclaration, TypeDeclaration, TypeDefinition,
-        TypeExpression, TypeName, TypeValue, UnionValue, Value, VariableDeclaration, VariableName,
+        FunctionArgument, NominalType, Program, Spec, StructFieldTypeDeclaration, TypeDeclaration,
+        TypeDefinition, TypeExpression, TypeName, TypeValue, UnionValue, Value,
+        VariableDeclaration, VariableName,
     },
     parser::{ParserError, TERMINATING_CHARACTERS, scanner::Scanner},
     util::LinkedList,
@@ -132,7 +133,7 @@ impl Parsable for TypeDeclaration {
 
         Ok(Self {
             type_name,
-            type_definition,
+            type_definition: Some(type_definition), // TODO: handle the case where there are no type definition
         })
     }
 }
@@ -196,7 +197,10 @@ impl Parsable for NominalType {
                     )
                     .context("struct type not properly closed")?;
                 scanner.skip_whitespace();
-                Ok(Self::StructType(NonEmpty { head, tail }))
+                Ok(Self::StructType {
+                    generics: Vec::new(), // TODO: prase generic arguments
+                    fields: NonEmpty { head, tail },
+                })
             }
             '[' => {
                 scanner
@@ -226,7 +230,10 @@ impl Parsable for NominalType {
                     )
                     .context("enum type not properly closed")?;
                 scanner.skip_whitespace();
-                Ok(Self::EnumType(NonEmpty { head, tail }))
+                Ok(Self::UnionType {
+                    generics: Vec::new(), // TODO: parse generic arguments
+                    members: NonEmpty { head, tail },
+                })
             }
             _ => Err(ParserError {
                 message: "unexpected character when parsing nominal type".to_string(),
@@ -351,7 +358,12 @@ impl Parsable for TypeValue {
             Ok(Self::TypeTuple(NonEmpty { head, tail }))
         } else {
             TypeName::parse(scanner)
-                .map(Self::TypeName)
+                .map(|type_name| {
+                    Self::TypeName {
+                        type_name,
+                        generics: Vec::new(), // TODO: Handle the case where generics are supplied
+                    }
+                })
                 .context("failed to parse type name")
         }
     }
@@ -438,8 +450,8 @@ impl Parsable for ExpressionValue {
                 .advance_and_skip_whitespace()
                 .context("failed to advance after '\\' in lambda")?;
 
-            let declaration = StructFieldTypeDeclaration::parse(scanner)
-                .context("failed to parse lambda parameter")?;
+            let function_arg =
+                FunctionArgument::parse(scanner).context("failed to parse lambda argument")?;
 
             scanner
                 .expect_character('.', "expected `.` in lambda definition".to_string())
@@ -449,10 +461,10 @@ impl Parsable for ExpressionValue {
             let function_body =
                 ExpressionValue::parse(scanner).context("failed to parse lambda body")?;
 
-            Ok(Self::FunctionDeclaration(
-                declaration,
-                Box::new(function_body),
-            ))
+            Ok(Self::FunctionDeclaration {
+                function_arg,
+                function_body: Box::new(function_body),
+            })
         } else if scanner.current_char()?.is_uppercase() {
             let type_name =
                 TypeName::parse(scanner).context("failed to parse type name in type expression")?;
@@ -464,6 +476,34 @@ impl Parsable for ExpressionValue {
                 .map(Self::ValueExpression)
                 .context("failed to parse value expression")
         }
+    }
+}
+
+impl Parsable for FunctionArgument {
+    fn parse(scanner: &mut Scanner) -> Result<Self> {
+        let argument_name = VariableName::parse(scanner).context("failed to parse field name")?;
+
+        let type_expression = if scanner.current_char()? == &':' {
+            scanner.expect_character(
+                ':',
+                "expected `:` while parsing function argument".to_string(),
+            )?;
+            scanner.skip_whitespace();
+            let type_expression = TypeExpression::parse(scanner).with_context(|| {
+                format!(
+                    "failed to parse type expression for function argument '{}'",
+                    argument_name
+                )
+            })?;
+            Some(type_expression)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            argument_name,
+            type_expression,
+        })
     }
 }
 

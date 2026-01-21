@@ -4,30 +4,31 @@ use std::fmt::Display;
 ///
 /// <prog> ::= <def> {’,’ <def>}. // program is definition sequence
 /// <def> ::= ’@’ <file_name> // include defs from specified file
-/// | <tdef> // type definition
-/// | <vdef>. // value definition
+///         | <tdef> // type definition
+///         | <vdef>. // value definition
 /// <tdef> ::= <tname> ’=’ ( <tnom> // specify name of nominal type
-/// | <texp> ). // ... or structural type
-/// <tnom> ::= ’{’ <decl> {’,’ <decl>} ’}’ // type of struct
-/// | ’[’ <elem> {’,’ <elem>} ’]’. // type of union
+///          | <texp> ). // ... or structural type
+/// <tnom> ::= ’{’ {<tname> ’,’} <decl> {’,’ <decl>} ’}’ // type of struct
+///          | ’[’ {<tname> ’,’} <elem> {’,’ <elem>} ’]’ // type of union
 /// <decl> ::= <vname> ’:’ <texp>. // field is of given type
 /// <elem> ::= <vname> [’:’ <texp>]. // simple label or typed field
 /// <texp> ::= <tval>
-/// | <tval> ’->’ <texp>. // type of a function
-/// <tval> ::= <tname> // name of type
-/// | ’(’ <texp> {’,’ <texp>} ’)’. // tuple type or parenth
+///          | <tval> ’->’ <texp>. // type of a function
+/// <tval> ::= <tname> [’(’ <texp> {’,’ <texp>} ’)’]
+///          | ’(’ <texp> {’,’ <texp>} ’)’. // tuple type or parenth
 /// <vdef> ::= <vname> ’=’ <vexp>. // specify name of a value
 /// <vexp> ::= <fval>
-/// | <vexp> <fval>. // function application
-/// <fval> ::= ’\’ <decl> ’.’ <fval> // function definition (lambda)
-/// | <val>
-/// | <tname> <spec>. // create or take value of type
+///          | <vexp> <fval>. // function application
+/// <fval> ::= ’\’ <arg> ’.’ <fval> // function definition (lambda)
+///          | <val>
+///          | <tname> <spec>. // create or take value of type
+/// <arg> ::= <vname> [':' <texp>]
 /// <val> ::= <vname> // content of variable (named value)
-/// | ’(’ <vexp> {’,’ <vexp>} ’)’ // tuple or parentheses
-/// | <val> ’.’ <vname> // access field of tuple or struct
-/// | <val> ’[’ <vdef> {’,’ <vdef>} [’|’ <vexp>] ’]’. // case
+///         | ’(’ <vexp> {’,’ <vexp>} ’)’ // tuple or parentheses
+///         | <val> ’.’ <vname> // access field of tuple or struct
+///         | <val> ’[’ <vdef> {’,’ <vdef>} [’|’ <vexp>] ’]’. // case
 /// <spec> ::= ’[’ (<vdef> | <vname>) ’]’ // union value
-/// | ’{’ [<vdef> {’,’ <vdef>}] ’}’. // struct field values
+///          | ’{’ [<vdef> {’,’ <vdef>}] ’}’. // struct field values
 use nonempty::NonEmpty;
 
 use crate::util::LinkedList;
@@ -74,14 +75,14 @@ impl Display for FileName {
 // * Types *
 // *********
 
-/// <tdef> ::= <tname> ’=’ ( <tnom> | <texp> ).
+/// <tdef> ::= <tname> [’=’ (<tnom> | <texp>)]. // type spec. optional
 #[derive(Debug, Clone)]
 pub struct TypeDeclaration {
     /// <tname>
     pub type_name: TypeName,
 
-    /// ( <tnom> | <texp> )
-    pub type_definition: TypeDefinition,
+    /// ['=' ( <tnom> | <texp> )]
+    pub type_definition: Option<TypeDefinition>,
 }
 
 /// The nonterminals <tname> (type name), <vname> (value name) and <file_name> are not specified in the syntax
@@ -120,16 +121,23 @@ pub enum TypeDefinition {
     TypeExpression(TypeExpression),
 }
 
-/// <tnom> ::= ’{’ <decl> {’,’ <decl>} ’}’ | ’\[’ <elem> {’,’ <elem>} ’\]’
+/// <tnom> ::= ’{’ {<tname> ’,’} <decl> {’,’ <decl>} ’}’
+///          | ’[’ {<tname> ’,’} <elem> {’,’ <elem>} ’]’
 #[derive(Debug, Clone)]
 pub enum NominalType {
     /// type of struct
-    /// ’{’ <decl> {’,’ <decl>} ’}’
-    StructType(NonEmpty<StructFieldTypeDeclaration>),
+    /// ’{’ {<tname> ’,’} <decl> {’,’ <decl>} ’}’
+    StructType {
+        generics: Vec<TypeName>,
+        fields: NonEmpty<StructFieldTypeDeclaration>,
+    },
 
     /// type of union
-    /// ’\[’ <elem> {’,’ <elem>} ’\]’
-    EnumType(NonEmpty<EnumElementTypeDeclaration>),
+    /// ’[’ {<tname> ’,’} <elem> {’,’ <elem>} ’]’
+    UnionType {
+        generics: Vec<TypeName>,
+        members: NonEmpty<EnumElementTypeDeclaration>,
+    },
 }
 
 /// field is of given type
@@ -158,12 +166,16 @@ pub enum TypeExpression {
     FunctionType(Box<LinkedList<TypeValue>>),
 }
 
-/// <tval> ::= <tname> | ’(’ <texp> {’,’ <texp>} ’)’
+/// <tval> ::= <tname> [’(’ <texp> {’,’ <texp>} ’)’]
+///          | ’(’ <texp> {’,’ <texp>} ’)’
 #[derive(Debug, Clone)]
 pub enum TypeValue {
     /// name of type
-    /// <tname>
-    TypeName(TypeName),
+    /// <tname> [’(’ <texp> {’,’ <texp>} ’)’]
+    TypeName {
+        type_name: TypeName,
+        generics: Vec<TypeExpression>,
+    },
 
     /// tuple type or parenth
     /// ’(’ <texp> {’,’ <texp>} ’)’
@@ -211,12 +223,15 @@ pub struct Expression {
     pub values: Box<LinkedList<ExpressionValue>>,
 }
 
-/// <fval> ::= ’\’ <decl> ’.’ <fval> | <val> | <tname> <spec>
+/// <fval> ::= ’\’ <arg> ’.’ <fval> | <val> | <tname> <spec>
 #[derive(Debug, Clone)]
 pub enum ExpressionValue {
     /// function definition (lambda)
-    /// ’\’ <decl> ’.’ <fval>
-    FunctionDeclaration(StructFieldTypeDeclaration, Box<ExpressionValue>),
+    /// ’\’ <arg> ’.’ <fval>
+    FunctionDeclaration {
+        function_arg: FunctionArgument,
+        function_body: Box<ExpressionValue>,
+    },
 
     /// <val>
     ValueExpression(Value),
@@ -224,6 +239,13 @@ pub enum ExpressionValue {
     /// create or take value of type
     /// <tname> <spec>
     TypeExpression(TypeName, Spec),
+}
+
+/// <arg> ::= <vname> [':' <texp>]
+#[derive(Debug, Clone)]
+pub struct FunctionArgument {
+    pub argument_name: VariableName,
+    pub type_expression: Option<TypeExpression>,
 }
 
 /// <val> ::= <vname> | ’(’ <vexp> {’,’ <vexp>} ’)’ | <val> ’.’ <vname> | <val> ’[’ <vdef> {’,’ <vdef>} [’|’ <vexp>] ’]’
