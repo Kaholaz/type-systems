@@ -1,0 +1,9 @@
+@prelude.pifl,
+@prelude.pifl,
+
+v1 = id 1,
+v2 = getOrZero someInt,
+v3 = getOrZero noneInt,
+pair = mkPair 1 2,
+fst = pair.fst,
+snd = pair.snd

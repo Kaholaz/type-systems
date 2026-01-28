@@ -47,6 +47,7 @@ pub enum Type {
     Tuple(Vec<Type>),
     Function(Box<LinkedList<Type>>),
     RecursiveMarker(TypeName),
+    TypeParameter(TypeVarId),
 }
 
 impl Type {
@@ -69,6 +70,7 @@ impl Type {
                                 ))?;
                         Ok(Type::RecursiveMarker(name.clone()))
                     }
+                    PartialType::Var(v) if v == var => Ok(Type::TypeParameter(var)),
                     _ => Err(DriverError::UnresolvedType { var }.into()),
                 }
             }
@@ -174,6 +176,7 @@ impl Display for Type {
                 )
             }
             Type::RecursiveMarker(type_name) => write!(f, "<-{}", type_name),
+            Type::TypeParameter(var) => write!(f, "T{}", var),
         }
     }
 }
@@ -338,11 +341,12 @@ pub fn type_check_impl(
     } in type_definitions
     {
         let expected = env.lookup_type(ctx, type_name.clone())?;
-        // TODO: Handle the case where the type definition is not provided (PIFL)
-        type_definition
-            .as_ref()
-            .expect("this may not be present in PIFL")
-            .check(&env, ctx, expected)?;
+        if let Some(type_definition) = type_definition.as_ref() {
+            type_definition.check(&env, ctx, expected)?;
+        } else {
+            // leave the type variable unconstrained; it can be inferred through use,
+            // and if it remains unconstrained it becomes a type parameter.
+        }
         let typ = env.lookup_type(ctx, type_name.clone())?;
         match typ {
             PartialType::Union(id, _) | PartialType::Struct(id, _) => {

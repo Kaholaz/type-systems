@@ -185,6 +185,7 @@ impl PartialType {
                 unification_goals.push((var, type_name.clone()));
                 PartialType::Var(var)
             }
+            Type::TypeParameter(var) => PartialType::Var(*var),
         }
     }
 }

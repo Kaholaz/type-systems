@@ -183,7 +183,12 @@ fn lookup(stack: &Stack, variable: &VariableName) -> Rc<RuntimeValue> {
     stack
         .iter()
         .find_map(|f| f.borrow().get(variable).cloned())
-        .expect("Could not lookup variable. This indicates an issue with the type checker.")
+        .unwrap_or_else(|| {
+            panic!(
+                "Could not lookup variable `{}`. This indicates an issue with the type checker.",
+                variable.as_str()
+            )
+        })
         .get()
 }
 
@@ -248,7 +253,14 @@ fn do_get_int_literal(int: isize) -> RuntimeValue {
 pub fn run_program(program: &Program) -> Vec<(VariableName, RuntimeValue)> {
     let stack = run_program_impl(program, &mut Vec::new());
     let (out, _) = stack.pop();
-    out.take()
+
+    let bindings: Vec<(VariableName, Rc<LazyRuntimeValue>)> = out
+        .borrow()
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+
+    bindings
         .into_iter()
         .map(|(name, value)| (name, value.get().as_ref().clone()))
         .collect()

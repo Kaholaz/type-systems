@@ -610,7 +610,7 @@ mod tests {
     #[test]
     fn test_missing_type_in_lambda_param() {
         let result = parse_program("f = \\x. x");
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]

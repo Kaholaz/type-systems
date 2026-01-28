@@ -118,22 +118,30 @@ impl Parsable for TypeDeclaration {
         let type_name =
             TypeName::parse(scanner).context("failed to parse type name in type declaration")?;
 
-        if *scanner.current_char()? != '=' {
+        // type specification is optional.
+        // Accept either:
+        // - `T = ...` (TIFL/PIFL)
+        // - `T`       (PIFL), only if followed by `,` or EOF
+        let type_definition = if scanner.is_at_end() || *scanner.current_char()? == ',' {
+            None
+        } else if *scanner.current_char()? == '=' {
+            scanner
+                .advance_and_skip_whitespace()
+                .context("failed to advance after '=' in type declaration")?;
+            let type_definition = TypeDefinition::parse(scanner)
+                .with_context(|| format!("failed to parse type definition for '{}'", type_name))?;
+            Some(type_definition)
+        } else {
             bail!(ParserError {
-                message: "expected `=` in type declaration".to_string(),
+                message: "expected `=` in type declaration (or end of declaration in PIFL)"
+                    .to_string(),
                 span: scanner.line_and_column(),
             });
-        }
-        scanner
-            .advance_and_skip_whitespace()
-            .context("failed to advance after '=' in type declaration")?;
-
-        let type_definition = TypeDefinition::parse(scanner)
-            .with_context(|| format!("failed to parse type definition for '{}'", type_name))?;
+        };
 
         Ok(Self {
             type_name,
-            type_definition: Some(type_definition), // TODO: handle the case where there are no type definition
+            type_definition,
         })
     }
 }
@@ -174,6 +182,20 @@ impl Parsable for NominalType {
                     .advance_and_skip_whitespace()
                     .context("failed to advance after '{' in struct type")?;
 
+                let mut generics = Vec::new();
+                while !scanner.is_at_end() && scanner.current_char()?.is_uppercase() {
+                    let g = TypeName::parse(scanner)
+                        .context("failed to parse generic type parameter in struct type")?;
+                    scanner
+                        .expect_character(
+                            ',',
+                            "expected `,` after generic type parameter in struct type".to_string(),
+                        )
+                        .context("invalid generic parameter list in struct type")?;
+                    scanner.skip_whitespace();
+                    generics.push(g);
+                }
+
                 let head = StructFieldTypeDeclaration::parse(scanner)
                     .context("failed to parse first struct field")?;
                 let mut tail = Vec::new();
@@ -198,7 +220,7 @@ impl Parsable for NominalType {
                     .context("struct type not properly closed")?;
                 scanner.skip_whitespace();
                 Ok(Self::StructType {
-                    generics: Vec::new(), // TODO: prase generic arguments
+                    generics,
                     fields: NonEmpty { head, tail },
                 })
             }
@@ -206,6 +228,20 @@ impl Parsable for NominalType {
                 scanner
                     .advance_and_skip_whitespace()
                     .context("failed to advance after '[' in enum type")?;
+
+                let mut generics = Vec::new();
+                while !scanner.is_at_end() && scanner.current_char()?.is_uppercase() {
+                    let g = TypeName::parse(scanner)
+                        .context("failed to parse generic type parameter in union type")?;
+                    scanner
+                        .expect_character(
+                            ',',
+                            "expected `,` after generic type parameter in union type".to_string(),
+                        )
+                        .context("invalid generic parameter list in union type")?;
+                    scanner.skip_whitespace();
+                    generics.push(g);
+                }
 
                 let head = EnumElementTypeDeclaration::parse(scanner)
                     .context("failed to parse first enum element")?;
@@ -231,7 +267,7 @@ impl Parsable for NominalType {
                     .context("enum type not properly closed")?;
                 scanner.skip_whitespace();
                 Ok(Self::UnionType {
-                    generics: Vec::new(), // TODO: parse generic arguments
+                    generics,
                     members: NonEmpty { head, tail },
                 })
             }
@@ -357,14 +393,45 @@ impl Parsable for TypeValue {
             scanner.skip_whitespace();
             Ok(Self::TypeTuple(NonEmpty { head, tail }))
         } else {
-            TypeName::parse(scanner)
-                .map(|type_name| {
-                    Self::TypeName {
-                        type_name,
-                        generics: Vec::new(), // TODO: Handle the case where generics are supplied
-                    }
-                })
-                .context("failed to parse type name")
+            let type_name = TypeName::parse(scanner).context("failed to parse type name")?;
+
+            // allow generic instantiations `T(A, B)` in type expressions.
+            // (Note: in TIFL this is never used, but it's harmless to accept.)
+            let mut generics = Vec::new();
+            if !scanner.is_at_end() && *scanner.current_char()? == '(' {
+                scanner
+                    .advance_and_skip_whitespace()
+                    .context("failed to advance after '(' in generic type application")?;
+
+                let head = TypeExpression::parse(scanner)
+                    .context("failed to parse first generic type argument")?;
+                generics.push(head);
+
+                while *scanner.current_char()? == ',' {
+                    scanner
+                        .advance_and_skip_whitespace()
+                        .context("failed to advance after ',' in generic type application")?;
+                    generics.push(TypeExpression::parse(scanner).with_context(|| {
+                        format!(
+                            "failed to parse generic type argument at position {}",
+                            generics.len() + 1
+                        )
+                    })?);
+                }
+
+                scanner
+                    .expect_character(
+                        ')',
+                        "expected `)` at the end of generic type application".to_string(),
+                    )
+                    .context("generic type application not properly closed")?;
+                scanner.skip_whitespace();
+            }
+
+            Ok(Self::TypeName {
+                type_name,
+                generics,
+            })
         }
     }
 }

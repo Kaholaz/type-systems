@@ -1,0 +1,11 @@
+Option = [A, some: A, none],
+
+id = \x. x,
+
+someInt = Option[some = 1],
+noneInt = Option[none],
+
+getOrZero = \opt: Option. opt[some = id, none = 0],
+
+Pair = {A, B, fst: A, snd: B},
+mkPair = \a. \b. Pair{fst = a, snd = b}

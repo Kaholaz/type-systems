@@ -385,14 +385,24 @@ impl Infer for NominalType {
     fn infer(&self, env: &TypeEnv, ctx: &mut UnificationContext) -> Result<PartialType> {
         match self {
             NominalType::StructType { fields, generics } => {
-                // TODO: DO SOMETHING WITH THE GENERICS
+                let _ = generics.len();
+                let mut generic_frame = TypeFrame::new();
+                for g in generics {
+                    generic_frame.insert(g.clone().into(), ctx.new_type_var());
+                }
+                let env = if generics.is_empty() {
+                    env.clone()
+                } else {
+                    TypeEnv::new(Rc::new(generic_frame), env.clone())
+                };
+
                 let mut field_map = HashMap::new();
                 for StructFieldTypeDeclaration {
                     field_name,
                     type_expression,
                 } in fields
                 {
-                    let field_type = type_expression.infer(env, ctx).with_context(|| {
+                    let field_type = type_expression.infer(&env, ctx).with_context(|| {
                         format!("while inferring type for struct field `{}`", field_name)
                     })?;
                     let prev = field_map.insert(field_name.clone(), field_type);
@@ -411,14 +421,24 @@ impl Infer for NominalType {
                 Ok(PartialType::Struct(ctx.new_type_id(), fields))
             }
             NominalType::UnionType { members, generics } => {
-                // TODO: DO SOMETHING WITH THE GENERICS
+                let _ = generics.len();
+                let mut generic_frame = TypeFrame::new();
+                for g in generics {
+                    generic_frame.insert(g.clone().into(), ctx.new_type_var());
+                }
+                let env = if generics.is_empty() {
+                    env.clone()
+                } else {
+                    TypeEnv::new(Rc::new(generic_frame), env.clone())
+                };
+
                 let mut member_map = HashMap::new();
                 for member in members {
                     let member_type = member
                         .type_expression
                         .as_ref()
                         .map(|e| {
-                            e.infer(env, ctx).with_context(|| {
+                            e.infer(&env, ctx).with_context(|| {
                                 format!(
                                     "while inferring type for union member `{}`",
                                     member.element_name
@@ -478,10 +498,17 @@ impl Infer for TypeValue {
         match self {
             TypeValue::TypeName {
                 type_name,
-                generics, // TODO: do something with the generics
-            } => env
-                .lookup_type(ctx, type_name.clone())
-                .with_context(|| format!("while looking up type `{}`", type_name)),
+                generics,
+            } => {
+                let _ = generics.len();
+                for (i, g) in generics.iter().enumerate() {
+                    let _ = g
+                        .infer(env, ctx)
+                        .with_context(|| format!("while inferring generic argument #{}", i + 1))?;
+                }
+                env.lookup_type(ctx, type_name.clone())
+                    .with_context(|| format!("while looking up type `{}`", type_name))
+            }
             TypeValue::TypeTuple(elements) => {
                 let elements = elements
                     .iter()
@@ -530,19 +557,16 @@ impl Infer for ExpressionValue {
                 function_body,
             } => {
                 let arg_id = ctx.new_type_var();
-                // TODO: handle the case where type_expression is not present (PIFL):
-                let type_expression = type_expression
-                    .as_ref()
-                    .expect("this may not be present in PIFL");
-
-                type_expression
-                    .check(env, ctx, PartialType::Var(arg_id))
-                    .with_context(|| {
-                        format!(
-                            "while checking parameter type for function argument `{}`",
-                            argument_name
-                        )
-                    })?;
+                if let Some(type_expression) = type_expression.as_ref() {
+                    type_expression
+                        .check(env, ctx, PartialType::Var(arg_id))
+                        .with_context(|| {
+                            format!(
+                                "while checking parameter type for function argument `{}`",
+                                argument_name
+                            )
+                        })?;
+                }
 
                 let mut stack_frame = TypeFrame::new();
                 stack_frame.insert(argument_name.clone().into(), arg_id);
